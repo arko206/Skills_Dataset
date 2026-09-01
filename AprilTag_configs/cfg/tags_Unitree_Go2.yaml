@@ -1,0 +1,22 @@
+apriltag:
+  ros__parameters:
+    image_transport: raw
+    family: "36h11"
+    size: 0.18
+    max_hamming: 0
+
+    detector:
+      threads: 1       # use more CPU threads
+      decimate: 2.0    # keep at full resolution (lower = faster, higher = more detail)
+      blur: 0.0        # turn off blur (larger tags don’t need it)
+      refine: 1     # refine edges
+      sharpening: 0.25  # keep mild sharpening
+      debug: 1
+
+    pose_estimation_method: "pnp"
+
+    tag:
+      ids: [6]
+      frames: [go2_object]
+      sizes: [0.18]
+

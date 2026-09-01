@@ -1,0 +1,26 @@
+image_width: 1280
+image_height: 720
+camera_name: new_go2_camera
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [810.04819,   0.     , 632.56445,
+           0.     , 810.65817, 349.6626 ,
+           0.     ,   0.     ,   1.     ]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [-0.365240, 0.110270, -0.002810, -0.000700, 0.000000]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1., 0., 0.,
+         0., 1., 0.,
+         0., 0., 1.]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [584.47985,   0.     , 625.92949,   0.     ,
+           0.     , 746.25917, 345.93628,   0.     ,
+           0.     ,   0.     ,   1.     ,   0.     ]
