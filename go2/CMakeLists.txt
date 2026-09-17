@@ -34,4 +34,13 @@ target_link_libraries(go2_single_move unitree_sdk2)
 add_executable(walkgo2_navg_exec walkgo2_navg_exec.cpp)
 target_link_libraries(walkgo2_navg_exec unitree_sdk2)
 
+add_executable(go2_single_jump go2_single_jump.cpp)
+target_link_libraries(go2_single_jump unitree_sdk2)
+
+add_executable(go2_single_handstand go2_single_handstand.cpp)
+target_link_libraries(go2_single_handstand unitree_sdk2)
+
+add_executable(go2_single_handstand_and_move go2_single_handstand_and_move.cpp)
+target_link_libraries(go2_single_handstand_and_move unitree_sdk2)
+
 
