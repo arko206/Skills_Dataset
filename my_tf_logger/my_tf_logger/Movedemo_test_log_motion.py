@@ -1824,61 +1824,12 @@ class TFLogger(Node):
         stationary_run_indices = []
         confirmed_stationary_indices = None
 
-        # -----------------------------------------------------
-        # FRONTJUMP PHASE GATING
-        # -----------------------------------------------------
-        minimum_z_since_start = rows[0]["z"]
-
-        # For non-jump skills, this gate is already considered satisfied.
-        frontjump_takeoff_observed = (
-            self.mode != "FrontJump"
-        )
-
-        # FrontJump must rise sufficiently from its crouched
-        # configuration before final stationary detection is allowed.
-        frontjump_min_rise_from_crouch_m = 0.10
-
         # =====================================================
         # 2. CALCULATE VELOCITIES BETWEEN CONSECUTIVE POSES
         # =====================================================
         for index in range(1, len(rows)):
             previous = rows[index - 1]
             current = rows[index]
-
-            # -------------------------------------------------
-            # FRONTJUMP PHASE DETECTION
-            # -------------------------------------------------
-            minimum_z_since_start = min(
-                minimum_z_since_start,
-                current["z"],
-            )
-
-            if (
-                self.mode == "FrontJump"
-                and not frontjump_takeoff_observed
-            ):
-                vertical_rise_from_crouch = (
-                    current["z"]
-                    - minimum_z_since_start
-                )
-
-                if (
-                    vertical_rise_from_crouch
-                    >= frontjump_min_rise_from_crouch_m
-                ):
-                    frontjump_takeoff_observed = True
-
-                    # Any stationary samples belonging to the
-                    # crouched waiting phase must be discarded.
-                    stationary_run_indices = []
-
-                    self.get_logger().info(
-                        "[STATIONARY FILTER] "
-                        "FrontJump takeoff phase observed: "
-                        f"rise_from_crouch="
-                        f"{vertical_rise_from_crouch:.3f} m."
-                    )
-
 
             # Use the AprilTag/ROS sensor timestamps for velocity
             # calculation rather than logger-write timing.
@@ -2080,14 +2031,6 @@ class TFLogger(Node):
                         f"wall_time_ns={current['wall_time_ns']}."
                     )
 
-                continue
-
-            # -------------------------------------------------
-            # FRONTJUMP:
-            # Do not interpret the crouched hold as the final stop.
-            # -------------------------------------------------
-            if (self.mode == "FrontJump" and not frontjump_takeoff_observed):
-                stationary_run_indices = []
                 continue
 
             # =================================================
