@@ -22,8 +22,8 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 (needed for 3D projection)
 # -----------------------------------------------------------------------
 # 1. Load the CSV files
 # -----------------------------------------------------------------------
-BASE_CSV = "/home/unitree-arka/Go2_Skill_Base_Data_Sensor/HandStand/Trial_5/Tf_stationary_HandStand_Trial_5.csv"
-LEG_CSV = "/home/unitree-arka/Go2_Skill_Base_Data_Sensor/HandStand/Trial_5/Tf_leg_stationary_HandStand_Trial_5.csv"
+BASE_CSV = "/home/unitree-arka/Go2_Skill_Base_Data_Sensor/HandStand/Trial_10/Tf_stationary_HandStand_Trial_10.csv"
+LEG_CSV = "/home/unitree-arka/Go2_Skill_Base_Data_Sensor/HandStand/Trial_10/Tf_leg_stationary_HandStand_Trial_10.csv"
 
 base_df = pd.read_csv(BASE_CSV)
 leg_df = pd.read_csv(LEG_CSV)
