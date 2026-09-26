@@ -1,0 +1,66 @@
+primitive_id,primitive_name,sample_idx,V_x,V_y,V_yaw,V_x_kind,V_y_kind,V_yaw_kind,suggested_filename
+1,Forward only,1,0.15,0.0619,0.0976,primary,noise,noise,Tf_stationary_0_15_0_0619_0_0976.csv
+1,Forward only,2,0.6125,0.0351,0.0761,primary,noise,noise,Tf_stationary_0_6125_0_0351_0_0761.csv
+1,Forward only,3,1.075,0.0687,0.0786,primary,noise,noise,Tf_stationary_1_075_0_0687_0_0786.csv
+1,Forward only,4,1.5375,0.0558,0.0128,primary,noise,noise,Tf_stationary_1_5375_0_0558_0_0128.csv
+1,Forward only,5,2.0,0.0075,0.045,primary,noise,noise,Tf_stationary_2_0_0_0075_0_045.csv
+2,Lateral left only,1,0.0297,0.15,0.0227,noise,primary,noise,Tf_stationary_0_0297_0_15_0_0227.csv
+2,Lateral left only,2,0.0741,0.3125,0.0555,noise,primary,noise,Tf_stationary_0_0741_0_3125_0_0555.csv
+2,Lateral left only,3,0.0515,0.475,0.0064,noise,primary,noise,Tf_stationary_0_0515_0_475_0_0064.csv
+2,Lateral left only,4,0.0658,0.6375,0.0828,noise,primary,noise,Tf_stationary_0_0658_0_6375_0_0828.csv
+2,Lateral left only,5,0.0355,0.8,0.0632,noise,primary,noise,Tf_stationary_0_0355_0_8_0_0632.csv
+3,Lateral right only,1,0.0606,-0.8,0.0195,noise,primary,noise,Tf_stationary_0_0606_-0_8_0_0195.csv
+3,Lateral right only,2,0.0284,-0.6375,0.0467,noise,primary,noise,Tf_stationary_0_0284_-0_6375_0_0467.csv
+3,Lateral right only,3,0.0777,-0.475,0.0044,noise,primary,noise,Tf_stationary_0_0777_-0_475_0_0044.csv
+3,Lateral right only,4,0.0714,-0.3125,0.0154,noise,primary,noise,Tf_stationary_0_0714_-0_3125_0_0154.csv
+3,Lateral right only,5,0.0623,-0.15,0.0683,noise,primary,noise,Tf_stationary_0_0623_-0_15_0_0683.csv
+4a,Yaw only (positive/left),1,0.0596,0.0152,0.15,noise,noise,primary,Tf_stationary_0_0596_0_0152_0_15.csv
+4a,Yaw only (positive/left),2,0.0774,0.0104,1.1125,noise,noise,primary,Tf_stationary_0_0774_0_0104_1_1125.csv
+4a,Yaw only (positive/left),3,0.0261,0.0381,2.075,noise,noise,primary,Tf_stationary_0_0261_0_0381_2_075.csv
+4a,Yaw only (positive/left),4,0.0296,0.0182,3.0375,noise,noise,primary,Tf_stationary_0_0296_0_0182_3_0375.csv
+4a,Yaw only (positive/left),5,0.0376,0.0536,4.0,noise,noise,primary,Tf_stationary_0_0376_0_0536_4_0.csv
+4b,Yaw only (negative/right),1,0.035,0.0644,-4.0,noise,noise,primary,Tf_stationary_0_035_0_0644_-4_0.csv
+4b,Yaw only (negative/right),2,0.0666,0.031,-3.0375,noise,noise,primary,Tf_stationary_0_0666_0_031_-3_0375.csv
+4b,Yaw only (negative/right),3,0.056,0.0231,-2.075,noise,noise,primary,Tf_stationary_0_056_0_0231_-2_075.csv
+4b,Yaw only (negative/right),4,0.025,0.0546,-1.1125,noise,noise,primary,Tf_stationary_0_025_0_0546_-1_1125.csv
+4b,Yaw only (negative/right),5,0.0666,0.0112,-0.15,noise,noise,primary,Tf_stationary_0_0666_0_0112_-0_15.csv
+5,Forward + yaw (left turn),1,0.15,0.016,4.0,primary,noise,primary,Tf_stationary_0_15_0_016_4_0.csv
+5,Forward + yaw (left turn),2,0.6125,0.0006,3.0375,primary,noise,primary,Tf_stationary_0_6125_0_0006_3_0375.csv
+5,Forward + yaw (left turn),3,1.075,0.063,2.075,primary,noise,primary,Tf_stationary_1_075_0_063_2_075.csv
+5,Forward + yaw (left turn),4,1.5375,0.0532,0.15,primary,noise,primary,Tf_stationary_1_5375_0_0532_0_15.csv
+5,Forward + yaw (left turn),5,2.0,0.0564,1.1125,primary,noise,primary,Tf_stationary_2_0_0_0564_1_1125.csv
+6,Forward + yaw (right turn),1,0.15,0.0535,-3.0375,primary,noise,primary,Tf_stationary_0_15_0_0535_-3_0375.csv
+6,Forward + yaw (right turn),2,0.6125,0.0377,-4.0,primary,noise,primary,Tf_stationary_0_6125_0_0377_-4_0.csv
+6,Forward + yaw (right turn),3,1.075,0.0452,-2.075,primary,noise,primary,Tf_stationary_1_075_0_0452_-2_075.csv
+6,Forward + yaw (right turn),4,1.5375,0.0612,-0.15,primary,noise,primary,Tf_stationary_1_5375_0_0612_-0_15.csv
+6,Forward + yaw (right turn),5,2.0,0.0508,-1.1125,primary,noise,primary,Tf_stationary_2_0_0_0508_-1_1125.csv
+7,Lateral left + left turn,1,0.0025,0.15,3.0375,noise,primary,primary,Tf_stationary_0_0025_0_15_3_0375.csv
+7,Lateral left + left turn,2,0.0349,0.3125,4.0,noise,primary,primary,Tf_stationary_0_0349_0_3125_4_0.csv
+7,Lateral left + left turn,3,0.0172,0.475,0.15,noise,primary,primary,Tf_stationary_0_0172_0_475_0_15.csv
+7,Lateral left + left turn,4,0.0327,0.6375,2.075,noise,primary,primary,Tf_stationary_0_0327_0_6375_2_075.csv
+7,Lateral left + left turn,5,0.0683,0.8,1.1125,noise,primary,primary,Tf_stationary_0_0683_0_8_1_1125.csv
+8,Lateral left + right turn,1,0.0235,0.15,-3.0375,noise,primary,primary,Tf_stationary_0_0235_0_15_-3_0375.csv
+8,Lateral left + right turn,2,0.053,0.3125,-4.0,noise,primary,primary,Tf_stationary_0_053_0_3125_-4_0.csv
+8,Lateral left + right turn,3,0.0446,0.475,-2.075,noise,primary,primary,Tf_stationary_0_0446_0_475_-2_075.csv
+8,Lateral left + right turn,4,0.0627,0.6375,-0.15,noise,primary,primary,Tf_stationary_0_0627_0_6375_-0_15.csv
+8,Lateral left + right turn,5,0.0531,0.8,-1.1125,noise,primary,primary,Tf_stationary_0_0531_0_8_-1_1125.csv
+9,Lateral right + left turn,1,0.0018,-0.8,0.15,noise,primary,primary,Tf_stationary_0_0018_-0_8_0_15.csv
+9,Lateral right + left turn,2,0.0072,-0.6375,3.0375,noise,primary,primary,Tf_stationary_0_0072_-0_6375_3_0375.csv
+9,Lateral right + left turn,3,0.0578,-0.475,1.1125,noise,primary,primary,Tf_stationary_0_0578_-0_475_1_1125.csv
+9,Lateral right + left turn,4,0.037,-0.3125,4.0,noise,primary,primary,Tf_stationary_0_037_-0_3125_4_0.csv
+9,Lateral right + left turn,5,0.0129,-0.15,2.075,noise,primary,primary,Tf_stationary_0_0129_-0_15_2_075.csv
+10,Lateral right + right turn,1,0.0557,-0.8,-1.1125,noise,primary,primary,Tf_stationary_0_0557_-0_8_-1_1125.csv
+10,Lateral right + right turn,2,0.0357,-0.6375,-2.075,noise,primary,primary,Tf_stationary_0_0357_-0_6375_-2_075.csv
+10,Lateral right + right turn,3,0.0305,-0.475,-0.15,noise,primary,primary,Tf_stationary_0_0305_-0_475_-0_15.csv
+10,Lateral right + right turn,4,0.0241,-0.3125,-3.0375,noise,primary,primary,Tf_stationary_0_0241_-0_3125_-3_0375.csv
+10,Lateral right + right turn,5,0.0504,-0.15,-4.0,noise,primary,primary,Tf_stationary_0_0504_-0_15_-4_0.csv
+11,Forward-left + left turn,1,0.15,0.15,2.075,primary,primary,primary,Tf_stationary_0_15_0_15_2_075.csv
+11,Forward-left + left turn,2,0.6125,0.6375,3.0375,primary,primary,primary,Tf_stationary_0_6125_0_6375_3_0375.csv
+11,Forward-left + left turn,3,1.075,0.3125,4.0,primary,primary,primary,Tf_stationary_1_075_0_3125_4_0.csv
+11,Forward-left + left turn,4,1.5375,0.475,0.15,primary,primary,primary,Tf_stationary_1_5375_0_475_0_15.csv
+11,Forward-left + left turn,5,2.0,0.8,1.1125,primary,primary,primary,Tf_stationary_2_0_0_8_1_1125.csv
+12,Forward-right + right turn,1,0.15,-0.3125,-1.1125,primary,primary,primary,Tf_stationary_0_15_-0_3125_-1_1125.csv
+12,Forward-right + right turn,2,0.6125,-0.475,-2.075,primary,primary,primary,Tf_stationary_0_6125_-0_475_-2_075.csv
+12,Forward-right + right turn,3,1.075,-0.15,-3.0375,primary,primary,primary,Tf_stationary_1_075_-0_15_-3_0375.csv
+12,Forward-right + right turn,4,1.5375,-0.6375,-0.15,primary,primary,primary,Tf_stationary_1_5375_-0_6375_-0_15.csv
+12,Forward-right + right turn,5,2.0,-0.8,-4.0,primary,primary,primary,Tf_stationary_2_0_-0_8_-4_0.csv

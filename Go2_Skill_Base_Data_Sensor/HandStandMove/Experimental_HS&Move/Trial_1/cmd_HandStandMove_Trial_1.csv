@@ -1,0 +1,3 @@
+event,wall_time_ns,timestamp_iso,mode,trial_number,vx,vy,vyaw
+HANDSTAND_MOVE_START,1789612291632537881,2026-09-17T12:31:31.632,HandStandMove,1,0.4,0,0
+HANDSTAND_MOVE_END,1789612298669977980,2026-09-17T12:31:38.669,HandStandMove,1,0.4,0,0
