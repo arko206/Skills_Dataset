@@ -1,0 +1,194 @@
+HandStandMove Affine Transition Model — Experimental Summary and CoC Report Notes
+================================================================================
+
+1. Summary of Experimental Results
+----------------------------------
+
+• Dataset
+  - All 65 collected HandStandMove stages were successfully used.
+  - Number of training samples: N = 65.
+  - Skipped stages: 0.
+  - Each training sample maps the commanded velocity vector
+
+        V = [vx, vy, vyaw]^T
+
+    to the measured initial-body-frame transition
+
+        Delta_p_body = [Delta_x_body, Delta_y_body, Delta_theta]^T.
+
+• Batch Gradient Descent
+  - Batch gradient descent was performed using all 65 training samples at every iteration.
+  - Learning rate: 0.1.
+  - The training loss decreased from 0.3343077644 at iteration 1 to 0.0416016345.
+  - The successive-loss stopping criterion was satisfied at iteration 56.
+  - The loss curve decreased smoothly and flattened after approximately the first 15–20 iterations.
+
+• Learned Affine Transition Model
+
+        Delta_p_body = B V + C
+
+  with
+
+        B =
+        [ 0.18179  -0.03028  -0.00023 ]
+        [-0.00153   0.42364   0.03421 ]
+        [-0.02634  -0.15237   0.19068 ]
+
+        C =
+        [ 0.13690 ]
+        [-0.10634 ]
+        [-0.09930 ]
+
+• Learned Regression Equations
+
+        Delta_x_body = 0.18179 vx - 0.03028 vy - 0.00023 vyaw + 0.13690
+        Delta_y_body = -0.00153 vx + 0.42364 vy + 0.03421 vyaw - 0.10634
+        Delta_theta  = -0.02634 vx - 0.15237 vy + 0.19068 vyaw - 0.09930
+
+• Interpretation of Learned Coefficients
+  - Delta_x_body is influenced primarily by vx.
+  - Delta_y_body is influenced primarily by vy.
+  - Delta_theta is influenced primarily by vyaw.
+  - The learned model also captures cross-coupling between command variables and output displacement.
+
+• Delta_x_body Evaluation
+  - MSE: 0.007489 m^2
+  - RMSE: 0.086541 m
+  - MAE: 0.065617 m
+  - Maximum absolute error: 0.311413 m
+  - R^2: 0.6494
+  - This is the weakest of the three affine fits and can be described as a moderate fit.
+  - The measured-versus-predicted plot shows greater scatter, particularly for larger forward displacements.
+
+• Delta_y_body Evaluation
+  - MSE: 0.005406 m^2
+  - RMSE: 0.073524 m
+  - MAE: 0.057894 m
+  - Maximum absolute error: 0.234193 m
+  - R^2: 0.8824
+  - The lateral displacement is captured well by the affine model.
+
+• Delta_theta Evaluation
+  - MSE: 0.028706 rad^2
+  - RMSE: 0.169430 rad
+  - MAE: 0.139027 rad
+  - Maximum absolute error: 0.456574 rad
+  - R^2: 0.8548
+  - The yaw response is also captured well by the affine model.
+
+• Overall Interpretation
+  - The affine model captures substantial structure in the HandStandMove dynamics.
+  - The lateral and rotational responses have stronger fits than the longitudinal response.
+  - Delta_x_body has greater variability, but the model can still be tested as a preliminary transition model inside the motion planner.
+  - In HandStandMove, substantial Delta_x_body motion is mainly expected when a non-zero vx command is supplied.
+
+• Inverse Model for Motion Planning
+  - The learned B matrix is invertible.
+
+        det(B) = 0.01564838412
+
+  - The inverse matrix is
+
+        B_inverse =
+        [ 5.49522   0.37117  -0.05989 ]
+        [-0.03898   2.21477  -0.39742 ]
+        [ 0.72781   1.82111   4.91859 ]
+
+  - Therefore, the inverse transition model can be written as
+
+        V = B_inverse (Delta_p_body - C)
+
+  - This form can later be used by the motion planner/controller to map a desired local SE(2) transition into a HandStandMove command.
+
+
+2. Points to Include in the CoC Report
+--------------------------------------
+
+• Problem Definition
+  - Clearly define HandStandMove as a separate robot mode from ordinary four-leg Move.
+  - State the supervised transition-model mapping:
+
+        [vx, vy, vyaw] -> [Delta_x_body, Delta_y_body, Delta_theta]
+
+  - Explain that the displacement output is expressed in the robot's initial base frame.
+
+• Dataset
+  - State that 65 real-robot HandStandMove demonstrations were used.
+  - Explain that the HandStandMove portion of each trajectory was extracted beforehand.
+  - Mention that the extracted trajectories were inspected through plotting and RViz replay.
+  - The first and last poses of each filtered HandStandMove stage were used to define the transition.
+
+• Initial-to-Final Transition Calculation
+  - Compute the floor-frame translational difference:
+
+        Delta_x_floor = x_final - x_initial
+        Delta_y_floor = y_final - y_initial
+
+  - Rotate this displacement into the initial robot body frame:
+
+        [Delta_x_body]   [ cos(theta_0)   sin(theta_0)] [Delta_x_floor]
+        [Delta_y_body] = [-sin(theta_0)   cos(theta_0)] [Delta_y_floor]
+
+  - Compute the heading change as
+
+        Delta_theta = wrap(theta_final - theta_initial)
+
+• Affine Model
+  - Present the model
+
+        Delta_p_body = B V + C
+
+  - Explain the input and output ordering clearly.
+  - State that the velocity inputs were standardized only during gradient-descent optimization.
+  - State that the final B and C were converted back to physical input units.
+
+• Training Procedure
+  - Batch gradient descent.
+  - All 65 samples used in each optimization iteration.
+  - Fixed learning rate: 0.1.
+  - Stopping criterion:
+
+        |J_k - J_(k-1)| < 1e-10
+
+  - Convergence at iteration 56.
+  - Final training loss: 0.0416016345.
+
+• Learned Parameters
+  - Include the final B and C matrices.
+  - Include the three scalar regression equations if space permits.
+  - Explain that B describes the input-output sensitivities and cross-couplings.
+
+• Quantitative Evaluation
+
+        Output            RMSE          MAE           Max Error       R^2
+        ---------------------------------------------------------------------
+        Delta_x_body      0.086541 m    0.065617 m    0.311413 m      0.6494
+        Delta_y_body      0.073524 m    0.057894 m    0.234193 m      0.8824
+        Delta_theta       0.169430 rad  0.139027 rad  0.456574 rad    0.8548
+
+  - State that Delta_y_body and Delta_theta show strong preliminary affine fits.
+  - State that Delta_x_body shows a more moderate fit and greater variability.
+  - Do not claim perfect prediction.
+
+• Figures
+  - Include the gradient-descent loss-versus-iteration plot.
+  - Include the measured-versus-predicted plot for all three outputs.
+  - The prediction-error-versus-predicted plot can also be included if space permits, or moved to an appendix/supplementary-results section.
+
+• Planner Connection
+  - Explain that the transition model is intended to provide a planner-friendly local SE(2) model.
+  - Since B is invertible, the command can be estimated from a desired displacement using
+
+        V = B_inverse (Delta_p_body - C)
+
+  - State that B, C and B_inverse are saved for later use by the motion-planning/controller code.
+
+• Next Experimental Step
+  - Integrate the learned HandStandMove affine transition model into the motion planner.
+  - Evaluate whether the learned transition model provides sufficient accuracy for skill-level planning and composition on the real Unitree Go2.
+
+
+3. Suggested CoC Interpretation Paragraph
+-----------------------------------------
+
+The preliminary results indicate that a simple affine transition model captures substantial structure in the HandStandMove dynamics, particularly for lateral displacement and yaw change, while longitudinal displacement exhibits greater variability. The learned model remains directly invertible and will next be evaluated within the motion-planning framework to determine whether its predictive accuracy is sufficient for skill-level planning.

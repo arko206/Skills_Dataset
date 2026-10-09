@@ -1,0 +1,434 @@
+Stand -> HandStand Transition
+Summary of Experimental Results and CoC Report Writing Guide
+=============================================================
+
+1. EXPERIMENTAL CONTEXT
+-----------------------
+
+The Stand -> HandStand transition is a fixed Unitree Go2 skill transition with no
+continuous command input such as vx, vy, or vyaw.
+
+Therefore, unlike the HandStandMove transition, this stage is not modeled using an
+input-dependent affine model of the form
+
+    Delta_p_body = B V + C.
+
+Instead, each execution produces one net SE(2) displacement vector from the initial
+standing pose to the final HandStand pose. The learned transition is represented by
+the mean of these displacement vectors over all repeated trials.
+
+The transition representation is
+
+    Delta_p_body =
+        [delta_x_body,
+         delta_y_body,
+         delta_theta]^T
+
+with units
+
+    delta_x_body : metres
+    delta_y_body : metres
+    delta_theta  : radians.
+
+
+2. HOW EACH TRIAL IS PROCESSED
+------------------------------
+
+For each already-filtered Stand -> HandStand trajectory:
+
+    Initial pose = first row of the filtered trajectory
+    Final pose   = last row of the filtered trajectory
+
+Let
+
+    initial pose = (x0, y0, theta0)
+    final pose   = (x1, y1, theta1).
+
+First compute the world-frame displacement:
+
+    dx_world = x1 - x0
+    dy_world = y1 - y0.
+
+Then express the translational displacement in the INITIAL robot body frame:
+
+    delta_x_body =
+        cos(theta0) * dx_world
+        + sin(theta0) * dy_world
+
+    delta_y_body =
+        -sin(theta0) * dx_world
+        + cos(theta0) * dy_world.
+
+The yaw change is wrapped to [-pi, pi]:
+
+    delta_theta =
+        atan2(
+            sin(theta1 - theta0),
+            cos(theta1 - theta0)
+        ).
+
+Thus, each trial contributes one body-frame displacement vector.
+
+
+3. SUMMARY OF THE RESULTS
+-------------------------
+
+Trials requested : 65
+Valid trials     : 65
+Skipped trials   : 0
+
+All 65 collected Stand -> HandStand trajectories were successfully used.
+
+Mean Stand -> HandStand transition:
+
+    mean Delta_x_body = +0.097632147996 m
+    mean Delta_y_body = -0.062812786308 m
+    mean Delta_theta  = -0.208528304000 rad
+
+Therefore,
+
+    mean_transition =
+        [ +0.097632147996,
+          -0.062812786308,
+          -0.208528304000 ]^T
+
+with units [m, m, rad].
+
+An intuitive interpretation is:
+
+    Average forward displacement:
+        approximately +9.76 cm
+
+    Average lateral displacement:
+        approximately -6.28 cm in the robot body-y direction
+
+    Average yaw change:
+        approximately -0.2085 rad
+        approximately -11.95 degrees.
+
+
+4. REPEATABILITY / VARIABILITY
+------------------------------
+
+Sample standard deviation:
+
+    std Delta_x_body = +0.032228872389 m
+    std Delta_y_body = +0.024450208847 m
+    std Delta_theta  = +0.038369931555 rad
+
+Approximately:
+
+    sigma_x     = 3.22 cm
+    sigma_y     = 2.45 cm
+    sigma_theta = 2.20 degrees.
+
+This means that repeated executions of the same fixed Stand -> HandStand skill do
+not produce exactly the same displacement, but the resulting displacement is
+clustered around the learned mean transition.
+
+
+5. SAMPLE COVARIANCE MATRIX
+---------------------------
+
+Variable ordering:
+
+    [delta_x_body, delta_y_body, delta_theta]
+
+Sample covariance matrix:
+
+    [ +0.001038700215   +0.000113224467   -0.000087650338 ]
+    [ +0.000113224467   +0.000597812713   -0.000291356087 ]
+    [ -0.000087650338   -0.000291356087   +0.001472251648 ]
+
+The diagonal elements are the variances:
+
+    Var(delta_x_body) = 0.001038700215 m^2
+    Var(delta_y_body) = 0.000597812713 m^2
+    Var(delta_theta)  = 0.001472251648 rad^2
+
+and satisfy
+
+    variance = (standard deviation)^2.
+
+The off-diagonal elements are covariances and describe how the trial-to-trial
+variations in different displacement components vary together.
+
+For the present deterministic planner, the covariance matrix is not required as a
+planner input. It is mainly useful for describing repeatability and uncertainty in
+the transition, and may later support uncertainty-aware planning if required.
+
+
+6. LEARNED TRANSITION MODEL FOR THE PLANNER
+-------------------------------------------
+
+Because Stand -> HandStand has no command input, the learned transition model can be
+written as
+
+    Delta_p_body approximately equal to mu_Stand_to_HS
+
+where
+
+    mu_Stand_to_HS =
+        [ +0.097632147996,
+          -0.062812786308,
+          -0.208528304000 ]^T.
+
+This is fundamentally different from the HandStandMove model:
+
+    Stand -> HandStand:
+        Delta_p_body approximately equal to a fixed mean transition
+
+    HandStandMove:
+        Delta_p_body = B V + C
+
+where V = [vx, vy, vyaw]^T.
+
+The fixed mean transition can be applied by the planner from the robot's current
+pose using the same SE(2) body-frame convention used throughout the other skill
+transition models.
+
+
+======================================================================
+PART B: WHAT TO WRITE IN THE CoC REPORT
+======================================================================
+
+7. MOTIVATION / WHY THIS TRANSITION NEEDS ITS OWN MODEL
+-------------------------------------------------------
+
+Explain that the complete skill-composition sequence contains qualitatively
+different robot modes:
+
+    Stand
+        ->
+    Stand-to-HandStand
+        ->
+    HandStandMove
+        ->
+    HandStand-to-Stand.
+
+The Stand -> HandStand stage is a fixed transition with no user-controlled velocity
+parameters. Therefore, it should not be modeled using the same input-dependent
+regression model as HandStandMove.
+
+Instead, repeated real-robot executions are used to estimate the typical net SE(2)
+change produced by this fixed skill.
+
+
+8. DATASET DESCRIPTION
+----------------------
+
+State clearly that:
+
+    - 65 real-robot Stand -> HandStand trajectories were collected.
+    - The trajectories were extracted from the larger HandStandMove demonstrations.
+    - Each extracted trajectory begins at the normal four-leg standing pose.
+    - Each extracted trajectory ends at the first verified HandStand-stage pose.
+    - All 65 trajectories were successfully used in the transition-model analysis.
+    - No trajectories were skipped.
+
+If relevant in the methodology section, mention that the extracted trajectories had
+already been separately validated before transition-model learning.
+
+
+9. STATE / TRANSITION REPRESENTATION
+------------------------------------
+
+Define the planar robot pose as
+
+    p = [x, y, theta]^T.
+
+For each trajectory, use the first pose as
+
+    p0 = [x0, y0, theta0]^T
+
+and the final pose as
+
+    p1 = [x1, y1, theta1]^T.
+
+Explain that direct world-frame displacement is not used as the learned skill model
+because the robot starts at different absolute positions and orientations across
+trials.
+
+Instead, the translational displacement is rotated into the INITIAL robot body
+frame:
+
+    delta_x_body =
+        cos(theta0)(x1-x0)
+        + sin(theta0)(y1-y0)
+
+    delta_y_body =
+        -sin(theta0)(x1-x0)
+        + cos(theta0)(y1-y0)
+
+and
+
+    delta_theta =
+        atan2(
+            sin(theta1-theta0),
+            cos(theta1-theta0)
+        ).
+
+This makes the transition representation independent of the robot's absolute
+position and heading on the laboratory floor and directly usable by the planner.
+
+
+10. WHY THE MODEL IS A MEAN RATHER THAN A REGRESSION
+----------------------------------------------------
+
+Explicitly explain that there is no control vector for Stand -> HandStand.
+
+Therefore, there is no relationship of the form
+
+    Delta_p_body = B V + C
+
+to learn.
+
+Instead, each trial gives one sample
+
+    Delta_p_body^(i),
+
+and the transition model is the arithmetic mean:
+
+    mu =
+        (1/N) sum_i Delta_p_body^(i),
+
+with N = 65.
+
+This is the central modeling decision for this stage.
+
+
+11. REPORT THE LEARNED MEAN TRANSITION
+--------------------------------------
+
+Report the final learned mean clearly:
+
+    mean Delta_x_body = +0.097632 m
+    mean Delta_y_body = -0.062813 m
+    mean Delta_theta  = -0.208528 rad
+
+or, in vector form,
+
+    mu_Stand_to_HS =
+        [ 0.097632,
+         -0.062813,
+         -0.208528 ]^T.
+
+Interpret this in physical terms:
+
+    - approximately 9.76 cm forward displacement;
+    - approximately 6.28 cm displacement in the negative body-y direction;
+    - approximately -11.95 degrees of yaw rotation.
+
+The signs should always be interpreted according to the robot body-frame
+convention used in the planner.
+
+
+12. REPORT THE TRANSITION VARIABILITY
+-------------------------------------
+
+Report the sample standard deviations:
+
+    sigma_x     = 0.032229 m
+    sigma_y     = 0.024450 m
+    sigma_theta = 0.038370 rad.
+
+Explain that these values quantify trial-to-trial variability when executing the
+same fixed skill.
+
+You may also include the covariance matrix either in the main text or in an
+appendix:
+
+    Sigma =
+    [  0.001038700215   0.000113224467  -0.000087650338
+       0.000113224467   0.000597812713  -0.000291356087
+      -0.000087650338  -0.000291356087   0.001472251648  ].
+
+For the current deterministic planner, state that only the mean transition is used,
+while the variance/covariance statistics are retained to characterize
+repeatability and may support future uncertainty-aware extensions.
+
+
+13. INTERPRETATION OF THE RESULTS
+---------------------------------
+
+A suitable interpretation is:
+
+"The Stand-to-HandStand transition exhibited a consistent non-zero planar
+displacement across repeated real-robot executions. When expressed in the robot's
+initial body frame, the transition produced an average forward displacement of
+approximately 0.098 m, a lateral displacement of approximately -0.063 m, and a yaw
+change of approximately -0.209 rad. The corresponding standard deviations were
+approximately 0.032 m, 0.024 m, and 0.038 rad, respectively, indicating moderate
+trial-to-trial variability around the mean transition."
+
+Then connect this to planning:
+
+"Because the Stand-to-HandStand skill has no continuous control input, its motion
+effect is represented as a fixed learned transition equal to the mean body-frame
+SE(2) displacement. This differs from the HandStandMove skill, whose transition
+depends on the commanded velocity vector and is therefore represented using an
+input-dependent affine model."
+
+
+14. HOW THIS FITS INTO THE COMPLETE SKILL-CHAINING MODEL
+--------------------------------------------------------
+
+Present the transition-model hierarchy clearly:
+
+    Stand -> HandStand:
+        Delta_p_body approximately equal to mu_Stand_to_HS
+
+    HandStandMove:
+        Delta_p_body = B_HSM V + C_HSM
+
+    HandStand -> Stand:
+        Delta_p_body approximately equal to mu_HS_to_Stand
+        [to be learned separately using the same averaging procedure]
+
+This demonstrates that different modes in the skill chain can use different
+transition-model structures depending on whether the corresponding skill has
+controllable input parameters.
+
+
+15. SUGGESTED CoC SUBSECTION STRUCTURE
+--------------------------------------
+
+A concise subsection could be organized as:
+
+    1. Stand-to-HandStand Transition
+       1.1 Data collection and stage extraction
+       1.2 Initial-body-frame SE(2) displacement definition
+       1.3 Fixed transition model
+       1.4 Experimental results
+       1.5 Transition variability
+       1.6 Integration with the skill-level planner
+
+Within the results subsection, include a small table such as:
+
+    Quantity                  Mean            Sample Std. Dev.
+    -----------------------------------------------------------
+    delta_x_body [m]          +0.097632       0.032229
+    delta_y_body [m]          -0.062813       0.024450
+    delta_theta [rad]         -0.208528       0.038370
+
+The covariance matrix can be placed immediately below this table or moved to an
+appendix if space is limited.
+
+
+16. MAIN TAKEAWAY FOR THE CoC
+-----------------------------
+
+The main research message is not simply that the robot changes pose during a
+HandStand.
+
+The important point is that a fixed high-level robot skill can be represented by a
+data-driven transition model in SE(2).
+
+For Stand -> HandStand, repeated real-robot demonstrations provide a distribution
+of resulting displacements. The mean of that distribution is used as the
+deterministic transition prediction for planning, while the measured spread
+provides an empirical characterization of uncertainty and repeatability.
+
+This transition model can then be composed with the input-dependent HandStandMove
+transition and, later, the HandStand -> Stand transition as part of a complete
+skill-level motion-planning framework.
