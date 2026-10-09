@@ -39,7 +39,7 @@ class MultiTFLogger(Node):
         super().__init__('multi_tf_logger')
 
         self.declare_parameter('rate_hz', 10.0)
-        self.declare_parameter('output_file', os.path.expanduser('~/DemoTag_Redo_20th_multi_tf_log.txt'))
+        self.declare_parameter('output_file', os.path.expanduser('~/DemoTag_Redo_22th_multi_tf_log.txt'))
 
         self.rate_hz     = self.get_parameter('rate_hz').get_parameter_value().double_value
         self.output_file = self.get_parameter('output_file').get_parameter_value().string_value
