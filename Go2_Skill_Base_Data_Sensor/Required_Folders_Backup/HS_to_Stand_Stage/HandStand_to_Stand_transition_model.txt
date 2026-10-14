@@ -1,0 +1,30 @@
+Unitree Go2 HandStand -> Stand transition model
+
+Number of valid trials:
+65
+
+Representation:
+Delta_p_body = [delta_x_body, delta_y_body, delta_theta]^T
+Units: delta_x_body [m], delta_y_body [m], delta_theta [rad]
+Translation expressed in the robot's INITIAL body frame; delta_theta wrapped to [-pi, pi].
+
+Mean transition:
+mean_delta_x_body   = -0.084099647866
+mean_delta_y_body   = -0.048083618562
+mean_delta_theta    = -0.032417929738
+
+Mean transition vector:
+[ -0.084099647866  -0.048083618562  -0.032417929738 ]
+
+Standard deviation (sample, ddof = 1):
+std_delta_x_body    = +0.062080647154
+std_delta_y_body    = +0.038696580789
+std_delta_theta     = +0.098597806115
+
+Sample covariance matrix (ddof = 1):
+[ +0.003854006751  +0.000918036781  +0.001106202394 ]
+[ +0.000918036781  +0.001497425365  +0.000061418492 ]
+[ +0.001106202394  +0.000061418492  +0.009721527371 ]
+
+Variable ordering:
+delta_x_body, delta_y_body, delta_theta
