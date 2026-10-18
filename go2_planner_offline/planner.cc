@@ -1,0 +1,1172 @@
+// planner.cc — SE(2) RRT Blossom Planner + Controller
+//
+// Configuration Files:
+//   planner.cfg  — Master settings (search budget, robot parameters, paths)
+//   query.cfg    — Dynamic problem settings (start/goal/obstacles)
+//
+// Execution:  ./astar --config planner.cfg
+//             (Writes waypoints and controls as specified in config)
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+#include <ctime>
+
+
+#define MIN_DIST 0.1
+#define MIN_ROT 0.2
+#define MAX_V 0.5
+#define MAX_VTH (M_PI/3)
+#define MAX_ITERS 2000
+#define AOX_RUNS 100
+#define GOAL_BIAS_PERCENT 0
+#define LATERAL_BIAS_PERCENT 10
+#define ROT_ERR 10
+
+// Optional goal behavior flag: Annular ring (80-100cm) + Heading to Goal (+/- 10 deg)
+#define JUMP true
+
+// ============================================================
+// Geometry helpers (forward declarations)
+// ============================================================
+static inline double wrap_angle(double a);
+
+// ============================================================
+// SE(2) Configuration
+// ============================================================
+struct Configuration
+{
+    double x = 0.0;
+    double y = 0.0;
+    double theta = 0.0;
+
+    static double weight_theta;
+
+    double distance(const Configuration& other) const {
+        double dx = other.x - x;
+        double dy = other.y - y;
+        double d_euc = std::sqrt(dx * dx + dy * dy);
+        double d_theta = std::fabs(wrap_angle(other.theta - theta));
+        return d_euc + weight_theta * d_theta;
+    }
+
+    double distance(const Configuration& other, int dimid) const {
+        if (dimid == 0) return std::fabs(other.x - x);
+        if (dimid == 1) return std::fabs(other.y - y);
+        if (dimid == 2) return std::fabs(wrap_angle(other.theta - theta));
+        return 0.0;
+    }
+
+    double distance(const Configuration& other, const std::vector<int>& dims) const {
+        if (dims.size() == 3) {
+            bool has0 = false, has1 = false, has2 = false;
+            for (int d : dims) { if (d==0) has0=true; if (d==1) has1=true; if (d==2) has2=true; }
+            if (has0 && has1 && has2) return distance(other);
+        }
+
+        double d_total = 0.0;
+        bool has_x = false, has_y = false;
+        for (int d : dims) {
+            if (d == 0) has_x = true;
+            else if (d == 1) has_y = true;
+            else if (d == 2) d_total += weight_theta * std::fabs(wrap_angle(other.theta - theta));
+        }
+        if (has_x && has_y) {
+            double dx = other.x - x;
+            double dy = other.y - y;
+            d_total += std::sqrt(dx * dx + dy * dy);
+        }
+        else if (has_x) d_total += std::fabs(other.x - x);
+        else if (has_y) d_total += std::fabs(other.y - y);
+        return d_total;
+    }
+};
+
+double Configuration::weight_theta = 0.5;
+
+// ============================================================
+// Rectangular obstacle
+// ============================================================
+struct Obstacle
+{
+    Configuration pose;
+    double length = 0.35;
+    double width = 0.25;
+};
+
+// ============================================================
+// Full planner configuration
+// ============================================================
+struct PlannerConfig
+{
+    // Map bounds (metres)
+    double x_min = -1.5;
+    double x_max = 1.5;
+    double y_min = -1.5;
+    double y_max = 2.75;
+
+    // Search settings
+    int blossom_number = 10;
+    int seed = -1;
+    double w_theta = 1;
+    bool smooth_path = false;
+    bool allow_reverse = false;
+    bool allow_lateral = false;
+
+    // Goal tolerance (Euclidean, metres)
+    double goal_tol = 0.2;
+
+    // Robot geometry
+    double robot_radius = 0.5;
+    double robot_length = 0.4;
+    double robot_width = 0.35;
+
+    // Obstacles
+    std::vector<Obstacle> obstacles;
+    double safety_margin = 0.1;
+
+    // File paths
+    std::string waypoints_out = "se2_waypoints.txt";
+    std::string controls_out = "controls.txt";
+    std::string query_file = "query.cfg";
+
+    // Poses
+    Configuration start;
+    Configuration goal;
+
+    // Controller settings
+    double step_time = 1.0;
+};
+
+// ============================================================
+// Geometry helpers
+// ============================================================
+static inline double wrap_angle(double a)
+{
+    return std::atan2(std::sin(a), std::cos(a));
+}
+
+static inline double hypot2(double dx, double dy)
+{
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+struct Vec2 {
+    double x, y;
+};
+
+static inline Vec2 rotate_vec(const Vec2& v, double th) {
+    return {v.x * std::cos(th) - v.y * std::sin(th),
+            v.x * std::sin(th) + v.y * std::cos(th)};
+}
+
+static inline bool overlap(double min1, double max1, double min2, double max2) {
+    return std::max(min1, min2) <= std::min(max1, max2);
+}
+
+static inline bool rect_intersects_rect(double x1, double y1, double th1, double l1, double w1,
+                                        double x2, double y2, double th2, double l2, double w2,
+                                        double safety)
+{
+    // Apply safety margin to BOTH rectangles (effectively inflating the footprint)
+    // Actually, user said only inflate obstacles by safety margin.
+    // So we'll treat obstacle as (L2 + 2*safety, W2 + 2*safety).
+
+    //--(a) safety margin applied as inflation to obstacle rectangle
+    double L1 = l1, W1 = w1;
+    double L2 = l2 + 2*safety, W2 = w2 + 2*safety;
+    
+    //-(b) Get corners of both rectangles in world frame
+    Vec2 corners1[4], corners2[4];
+    double hl1 = L1/2.0, hw1 = W1/2.0;
+    double hl2 = L2/2.0, hw2 = W2/2.0;
+    
+    //-- (c) Define corners in local frame (centered at rectangle center, aligned with rectangle axes)
+    Vec2 raw1[4] = {{-hl1, -hw1}, {hl1, -hw1}, {hl1, hw1}, {-hl1, hw1}};
+    Vec2 raw2[4] = {{-hl2, -hw2}, {hl2, -hw2}, {hl2, hw2}, {-hl2, hw2}};
+    
+    //-(d) Rotate and translate corners to world frame
+    for(int i=0; i<4; ++i) {
+        Vec2 r1 = rotate_vec(raw1[i], th1);
+        corners1[i] = {x1 + r1.x, y1 + r1.y};
+        Vec2 r2 = rotate_vec(raw2[i], th2);
+        corners2[i] = {x2 + r2.x, y2 + r2.y};
+    }
+
+    // --(e) Axes to test: Normals to the 4 sides (2 from each rect)
+    Vec2 axes[4];
+
+    //-- (f) axes[0] is normal to the rectangle-1 along it heading (th1), while axes [1]` is the normal to rectangle-1 along its width.
+    // Similarly for axes[2] and axes[3] for rectangle-2.
+    axes[0] = {std::cos(th1), std::sin(th1)};
+    axes[1] = {-std::sin(th1), std::cos(th1)};
+    axes[2] = {std::cos(th2), std::sin(th2)};
+    axes[3] = {-std::sin(th2), std::cos(th2)};
+    
+    // --(g) projecting both rectangles onto each axis and checking for overlap (Separating Axis Theorem)
+    for (int i=0; i<4; ++i) {
+        double min1 = 1e18, max1 = -1e18;
+        double min2 = 1e18, max2 = -1e18;
+        for (int j=0; j<4; ++j) {
+            double p1 = corners1[j].x * axes[i].x + corners1[j].y * axes[i].y;
+            min1 = std::min(min1, p1); max1 = std::max(max1, p1);
+            double p2 = corners2[j].x * axes[i].x + corners2[j].y * axes[i].y;
+            min2 = std::min(min2, p2); max2 = std::max(max2, p2);
+        }
+        //--(h) Check for overlap on this axis [sandard i-dimensonal overalap check between (min1, max1) and (min2, max2)]
+        if (!overlap(min1, max1, min2, max2)) return false;
+    }
+    return true;
+}
+// Checking if robot at (px, py, pth) collides with any obstacle in the config (with safety margin)
+static inline bool point_hits_any_obstacle(double px, double py, double pth,
+                                           const PlannerConfig &cfg)
+{
+    for (const auto &ob : cfg.obstacles)
+        if (rect_intersects_rect(px, py, pth, cfg.robot_length, cfg.robot_width,
+                                 ob.pose.x, ob.pose.y, ob.pose.theta, ob.length, ob.width,
+                                 cfg.safety_margin))
+            return true;
+    return false;
+}
+
+// ============================================================
+// Collision checking
+// ============================================================
+static bool is_free(double px, double py, double pth, const PlannerConfig &cfg)
+{
+    // Check map bounds
+    double RL = cfg.robot_length, RW = cfg.robot_width;
+    double r = std::max(RL, RW) / 2.0; // Conservative radius for simple bounds check
+
+
+    //Your code checks the negation of that:
+
+    // (1) if left side crosses boundary
+    // (2) or right side crosses boundary
+    // (3) or bottom side crosses boundary
+    // (4) or top side crosses boundary
+    if (px - r < cfg.x_min || px + r > cfg.x_max ||
+        py - r < cfg.y_min || py + r > cfg.y_max)
+        return false;
+    return !point_hits_any_obstacle(px, py, pth, cfg);
+}
+
+// ============================================================
+// Config-file loader (key = value, # comments)
+// ============================================================
+static bool load_config_file(const std::string &path, PlannerConfig &cfg)
+{
+    std::ifstream f(path);
+    if (!f)
+    {
+        std::cerr << "Cannot open config: " << path << "\n";
+        return false;
+    }
+
+    auto trim = [](std::string &s)
+    {
+        auto a = s.find_first_not_of(" \t\r\n");
+        auto b = s.find_last_not_of(" \t\r\n");
+        s = (a == std::string::npos) ? "" : s.substr(a, b - a + 1);
+    };
+
+    std::string line;
+    while (std::getline(f, line))
+    {
+        auto sharp = line.find('#');
+        if (sharp != std::string::npos)
+            line.erase(sharp);
+        auto first = line.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos)
+            continue;
+
+        auto eq = line.find('=');
+        if (eq == std::string::npos)
+            continue;
+
+        std::string key = line.substr(0, eq);
+        std::string val = line.substr(eq + 1);
+        trim(key);
+        trim(val);
+        if (key.empty() || val.empty())
+            continue;
+
+        try
+        {
+            if (key == "x_min")
+                cfg.x_min = std::stod(val);
+            else if (key == "x_max")
+                cfg.x_max = std::stod(val);
+            else if (key == "y_min")
+                cfg.y_min = std::stod(val);
+            else if (key == "y_max")
+                cfg.y_max = std::stod(val);
+            else if (key == "goal_tol")
+                cfg.goal_tol = std::stod(val);
+            else if (key == "robot_radius")
+                cfg.robot_radius = std::stod(val);
+            else if (key == "robot_length")
+                cfg.robot_length = std::stod(val);
+            else if (key == "robot_width")
+                cfg.robot_width = std::stod(val);
+            else if (key == "start_x")
+                cfg.start.x = std::stod(val);
+            else if (key == "start_y")
+                cfg.start.y = std::stod(val);
+            else if (key == "start_theta")
+                cfg.start.theta = std::stod(val);
+            else if (key == "goal_x")
+                cfg.goal.x = std::stod(val);
+            else if (key == "goal_y")
+                cfg.goal.y = std::stod(val);
+            else if (key == "goal_theta")
+                cfg.goal.theta = std::stod(val);
+            else if (key == "safety_margin")
+                cfg.safety_margin = std::stod(val);
+            else if (key == "blossom_number")
+                cfg.blossom_number = std::stoi(val);
+            else if (key == "smooth_path")
+                cfg.smooth_path = (val == "true" || val == "1");
+            else if (key == "allow_reverse")
+                cfg.allow_reverse = (val == "true" || val == "1");
+            else if (key == "allow_lateral")
+                cfg.allow_lateral = (val == "true" || val == "1");
+            else if (key == "seed")
+                cfg.seed = std::stoi(val);
+            else if (key == "w_theta")
+                cfg.w_theta = std::stod(val);
+            else if (key == "waypoints_out")
+                cfg.waypoints_out = val;
+            else if (key == "controls_out")
+                cfg.controls_out = val;
+            else if (key == "query_file")
+                cfg.query_file = val;
+            else if (key == "step_time")
+                cfg.step_time = std::stod(val);
+            else if (key.rfind("obs.", 0) == 0)
+            {
+                auto dot1 = key.find('.', 4);
+                if (dot1 != std::string::npos)
+                {
+                    int idx = std::stoi(key.substr(4, dot1 - 4));
+                    auto fld = key.substr(dot1 + 1);
+                    if (idx < 0)
+                        throw std::runtime_error("negative obstacle index");
+                    auto uidx = static_cast<std::size_t>(idx);
+                    if (uidx >= cfg.obstacles.size())
+                        cfg.obstacles.resize(uidx + 1);
+                    auto &ob = cfg.obstacles[uidx];
+                    if (fld == "x")
+                        ob.pose.x = std::stod(val);
+                    else if (fld == "y")
+                        ob.pose.y = std::stod(val);
+                    else if (fld == "theta")
+                        ob.pose.theta = std::stod(val);
+                    else if (fld == "length")
+                        ob.length = std::stod(val);
+                    else if (fld == "width")
+                        ob.width = std::stod(val);
+                }
+            }
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << "Config parse error for key '" << key
+                      << "': " << e.what() << "\n";
+        }
+    }
+    return true;
+}
+
+// ============================================================
+// Expansion Logic (Blossom)
+// ============================================================
+
+// ============================================================
+// Collision checking
+// ============================================================
+// --- Collision Check (Robotic Footprint) ---
+
+static bool rotation_free(double x, double y, double th0, double th1,
+                         const PlannerConfig &cfg)
+{
+    double dth = std::fabs(wrap_angle(th1 - th0));
+    int n = std::max(2, static_cast<int>(std::ceil(dth / (M_PI / 18.0)))); // Every 10 degrees
+    for (int i = 0; i <= n; ++i)
+    {
+        double t = static_cast<double>(i) / n;
+        double pth = wrap_angle(th0 + t * wrap_angle(th1 - th0));
+        if (!is_free(x, y, pth, cfg))
+            return false;
+    }
+    return true;
+}
+
+static bool segment_free(double x0, double y0,
+                         double x1, double y1,
+                         double pth,
+                         const PlannerConfig &cfg)
+{
+    double dx = x1 - x0;
+    double dy = y1 - y0;
+    double d = std::sqrt(dx * dx + dy * dy);
+    int n = std::max(2, static_cast<int>(std::ceil(d / 0.01)));
+    for (int i = 0; i <= n; ++i)
+    {
+        double t = static_cast<double>(i) / n;
+        double px = x0 + t * (x1 - x0);
+        double py = y0 + t * (y1 - y0);
+        if (!is_free(px, py, pth, cfg))
+            return false;
+    }
+    return true;
+}
+
+// is_free forward declaration removed
+
+
+
+// ============================================================
+// RRT types
+// ============================================================
+struct RRTNode
+{
+    Configuration point;
+    int parent = -1;
+    double cost = 0.0;
+};
+
+struct RotTranslateEdge {
+    Configuration mid;
+    Configuration end;
+    int parent_idx;
+    double eval_dist;
+};
+
+static bool is_goal_satisfied(const Configuration &p, const PlannerConfig &cfg)
+{
+#if defined(JUMP) && (JUMP == true)
+    // Annular ring centered at G(goal_x, goal_y)
+    double dx = cfg.goal.x - p.x;
+    double dy = cfg.goal.y - p.y;
+    double d_center = std::sqrt(dx * dx + dy * dy);
+
+    // Ring bounds: inner radius 80cm (0.80m), outer radius 100cm (1.00m)
+    const double r_inner = 0.80;
+    const double r_outer = 1.00;
+    if (d_center < r_inner || d_center > r_outer)
+        return false;
+
+    // Candidate pose theta must match heading to goal G +/- 10 degrees
+    double heading_to_goal = std::atan2(dy, dx);
+    double heading_err = std::fabs(wrap_angle(p.theta - heading_to_goal));
+    const double tol_rad = 10.0 * (M_PI / 180.0); // 10 degrees in radians
+
+    return heading_err <= tol_rad;
+#else
+    // Default circular XY goal region within goal_tol
+    double dg = p.distance(cfg.goal, {0, 1});
+    return dg <= cfg.goal_tol;
+#endif
+}
+
+static void update_best_goal(const std::vector<RRTNode> &tree, int idx,
+                             const PlannerConfig &cfg, int &goal_idx,
+                             double &best_goal_cost, int iter)
+{
+    if (is_goal_satisfied(tree[idx].point, cfg))
+    {
+        if (tree[idx].cost < best_goal_cost)
+        {
+            best_goal_cost = tree[idx].cost;
+            goal_idx = idx;
+            std::cout << "New best goal cost found: " << best_goal_cost
+                      << " (node " << idx << ") at iter " << iter << "\n";
+        }
+    }
+}
+
+struct KDNode
+{
+    int idx;
+    double x, y;
+    int left = -1;
+    int right = -1;
+};
+
+static void kdtree_insert(std::vector<KDNode> &nodes, int &root_idx, int new_node_idx, const Configuration &point, int depth = 0)
+{
+    if (root_idx == -1)
+    {
+        root_idx = static_cast<int>(nodes.size());
+        nodes.push_back({new_node_idx, point.x, point.y, -1, -1});
+        return;
+    }
+
+    bool split_x = (depth % 2 == 0);
+    double val = split_x ? point.x : point.y;
+    double root_val = split_x ? nodes[root_idx].x : nodes[root_idx].y;
+
+    if (val < root_val)
+        kdtree_insert(nodes, nodes[root_idx].left, new_node_idx, point, depth + 1);
+    else
+        kdtree_insert(nodes, nodes[root_idx].right, new_node_idx, point, depth + 1);
+}
+
+static void kdtree_query(const std::vector<KDNode> &nodes, int root_idx, const Configuration &q_sample,
+                         const std::vector<RRTNode> &tree, const PlannerConfig &cfg, int goal_idx,
+                         int &best_idx, double &min_dist_sq, int depth = 0)
+{
+    if (root_idx == -1) return;
+
+    const auto &kd = nodes[root_idx];
+    const auto &rrt_node = tree[kd.idx];
+
+    // 1. Goal optimization check (optional for find_nearest, usually skip for duplicates)
+    if (goal_idx == -2 || !(is_goal_satisfied(rrt_node.point, cfg) && goal_idx != -1))
+    {
+        // 2. Full SE(2) distance check
+        double d = rrt_node.point.distance(q_sample);
+        if (d < std::sqrt(min_dist_sq))
+        {
+            min_dist_sq = d * d;
+            best_idx = kd.idx;
+        }
+    }
+
+    bool split_x = (depth % 2 == 0);
+    double q_val = split_x ? q_sample.x : q_sample.y;
+    double kd_val = split_x ? kd.x : kd.y;
+
+    int near = (q_val < kd_val) ? kd.left : kd.right;
+    int far = (q_val < kd_val) ? kd.right : kd.left;
+
+    kdtree_query(nodes, near, q_sample, tree, cfg, goal_idx, best_idx, min_dist_sq, depth + 1);
+
+    double diff = std::fabs(q_val - kd_val);
+    if (diff * diff < min_dist_sq)
+    {
+        kdtree_query(nodes, far, q_sample, tree, cfg, goal_idx, best_idx, min_dist_sq, depth + 1);
+    }
+}
+
+static int find_nearest(const std::vector<RRTNode> &tree, const std::vector<KDNode> &kd_nodes, int kd_root,
+                        const Configuration &q_sample, const PlannerConfig &cfg, int goal_idx)
+{
+    int best_idx = -1;
+    double min_dist_sq = 1e36;
+    kdtree_query(kd_nodes, kd_root, q_sample, tree, cfg, goal_idx, best_idx, min_dist_sq);
+    return best_idx;
+}
+
+static int find_duplicate(const std::vector<RRTNode> &tree, const std::vector<KDNode> &kd_nodes, int kd_root, const Configuration &q)
+{
+    if (kd_root == -1) return -1;
+    
+    // Use KD-tree to find nearest, then check if it's within tolerance
+    int best_idx = -1;
+    double min_dist_sq = 1e36;
+    PlannerConfig dummy_cfg; // Goal optimization not needed for duplicate check
+    kdtree_query(kd_nodes, kd_root, q, tree, dummy_cfg, -2, best_idx, min_dist_sq);
+    
+    if (best_idx != -1) {
+        const double eps_pos = 1e-3;
+        const double eps_th = 1e-2;
+        if (tree[best_idx].point.distance(q, {0, 1}) < eps_pos &&
+            tree[best_idx].point.distance(q, 2) < eps_th)
+            return best_idx;
+    }
+    return -1;
+}
+
+static int add_node(std::vector<RRTNode> &tree, std::vector<KDNode> &kd_nodes, int &kd_root,
+                   const Configuration &point, int parent, double cost, long &rej_dup)
+{
+    int dup_idx = find_duplicate(tree, kd_nodes, kd_root, point);
+    if (dup_idx != -1) {
+        if (cost < tree[dup_idx].cost) {
+            tree[dup_idx].cost = cost;
+            tree[dup_idx].parent = parent;
+        }
+        rej_dup++;
+        return dup_idx;
+    }
+    tree.push_back({point, parent, cost});
+    int new_idx = static_cast<int>(tree.size() - 1);
+    kdtree_insert(kd_nodes, kd_root, new_idx, point);
+    return new_idx;
+}
+
+// ============================================================
+// Random Sampler
+// ============================================================
+static Configuration sample(const PlannerConfig &cfg, int iter, int goal_bias_percent, bool &sampling_goal)
+{
+    Configuration q;
+    sampling_goal = (iter > 2000) && ((rand() % 100) < goal_bias_percent); // Start goal bias after 2000 iters for richer viz
+    if (sampling_goal)
+    {
+        q = cfg.goal;
+    }
+    else
+    {
+        q.x = cfg.x_min + (cfg.x_max - cfg.x_min) * ((double)rand() / RAND_MAX);
+        q.y = cfg.y_min + (cfg.y_max - cfg.y_min) * ((double)rand() / RAND_MAX);
+        q.theta = -M_PI + 2.0 * M_PI * ((double)rand() / RAND_MAX);
+    }
+    return q;
+}
+
+static bool extend(const PlannerConfig &cfg, 
+                  const std::vector<RRTNode> &tree,
+                  int best_idx,
+                  const Configuration &r_sample, 
+                  bool sampling_goal,
+                  int iter,
+                  RotTranslateEdge &out_best_cand) 
+{
+    const auto &near = tree[best_idx];
+    
+    // 1. Rotation Phase (face the target)
+    double dx = r_sample.x - near.point.x;
+    double dy = r_sample.y - near.point.y;
+    double dtrans = near.point.distance(r_sample, {0, 1});
+
+    double target_th = near.point.theta;
+    bool is_reverse = false;
+    if (dtrans > 1e-6)
+    {
+        double th_fwd = std::atan2(dy, dx);
+        
+        if (cfg.allow_reverse) {
+            double th_rev = wrap_angle(th_fwd + M_PI);
+            double dth_fwd = std::fabs(wrap_angle(th_fwd - near.point.theta));
+            double dth_rev = std::fabs(wrap_angle(th_rev - near.point.theta));
+            
+            if (dth_rev < dth_fwd) {
+                target_th = th_rev;
+                is_reverse = true;
+            } else {
+                target_th = th_fwd;
+                is_reverse = false;
+            }
+        } else {
+            target_th = th_fwd;
+            is_reverse = false;
+        }
+    }
+
+    double dtheta = wrap_angle(target_th - near.point.theta);
+    // Steering: Clamp to MAX_VTH
+    double mag_th = std::min(std::fabs(dtheta), MAX_VTH);
+    // Threshold: if too small, skip rotation phase
+    if (mag_th < MIN_ROT) mag_th = 0.0;
+    
+    double signed_mag_th = (dtheta < 0) ? -mag_th : mag_th;
+    double mid_th = wrap_angle(near.point.theta + signed_mag_th);
+
+    // Steering: Clamp to MAX_V
+    double mag_v = std::min(dtrans, MAX_V);
+    // Threshold: if too small, skip translation phase
+    if (mag_v < MIN_DIST) mag_v = 0.0;
+
+    double signed_mag_v = is_reverse ? -mag_v : mag_v;
+
+    double end_x = near.point.x + signed_mag_v * std::cos(mid_th);
+    double end_y = near.point.y + signed_mag_v * std::sin(mid_th);
+
+    // 3. Collision Checks
+    bool valid_rot = (mag_th == 0.0) || rotation_free(near.point.x, near.point.y, near.point.theta, mid_th, cfg);
+    bool valid_trans = (mag_v == 0.0) || segment_free(near.point.x, near.point.y, end_x, end_y, mid_th, cfg);
+
+    if (valid_rot && valid_trans && (mag_th != 0.0 || mag_v != 0.0)) {
+        out_best_cand.mid = {near.point.x, near.point.y, mid_th};
+        out_best_cand.end = {end_x, end_y, mid_th};
+        out_best_cand.parent_idx = best_idx;
+        out_best_cand.eval_dist = out_best_cand.end.distance(r_sample);
+        return true;
+    }
+
+    return false;
+}
+
+static bool extend_lateral(const PlannerConfig &cfg, 
+                          const std::vector<RRTNode> &tree,
+                          int best_idx,
+                          RotTranslateEdge &out_best_cand)
+{
+    const auto &near = tree[best_idx];
+    
+    // Random displacement in [MIN_DIST, MAX_V]
+    double dist = MIN_DIST + ((double)rand() / RAND_MAX) * (MAX_V - MIN_DIST);
+    // Random direction: 0 = +y (left), 1 = -y (right)
+    double lat_sign = (rand() % 2 == 0) ? 1.0 : -1.0;
+
+    double angle = near.point.theta + (M_PI / 2.0) * lat_sign;
+    double end_x = near.point.x + dist * std::cos(angle);
+    double end_y = near.point.y + dist * std::sin(angle);
+
+    // Check collision - robot heading stays the same
+    if (!segment_free(near.point.x, near.point.y, end_x, end_y, near.point.theta, cfg))
+        return false;
+
+    out_best_cand.mid = {near.point.x, near.point.y, near.point.theta};
+    out_best_cand.end = {end_x, end_y, near.point.theta};
+    out_best_cand.parent_idx = best_idx;
+    out_best_cand.eval_dist = dist;
+    return true;
+}
+
+struct RRTResult {
+    bool success = false;
+    double cost = 1e18;
+    std::vector<Configuration> path;
+    std::vector<RRTNode> tree;
+    unsigned int seed;
+    long rej_dist = 0, rej_rot = 0, rej_col = 0, rej_dup = 0, rej_cost = 0;
+};
+
+// ============================================================
+// RRT search with AO-RRT Cost-Bounding
+// ============================================================
+static RRTResult run_rrt(const PlannerConfig &cfg, unsigned int seed, double global_cost_bound = 1e18)
+{   
+    RRTResult result;
+    result.seed = seed;
+    std::srand(seed);
+
+    //--(c)heading difference Δθ
+    // --(i) Δθ is scaled by cfg.w_theta
+    // --(ii) so orientation affects nearest-neighbor search and perhaps extension quality
+    //--- (iii) tuning w_theta allows us to control how much the planner cares about heading similarity vs position similarity when finding nearest neighbors and evaluating extensions.
+    // If large, the planner cares more about heading similarity.
+    // If small, it mostly cares about position.
+
+    Configuration::weight_theta = cfg.w_theta;
+
+
+    //-- tree
+
+    // --(a) Stores the actual RRT nodes.
+
+    //-- (b)Each RRTNode likely contains:
+
+    // -- (1) configuration point
+    //-- (2) parent index
+    //-- (3) accumulated path cost
+
+    //-- (4) So each node is a state:
+
+    // -- (a) qi=(xi,yi,θi)
+    //-- (b) with parent:parent(i)
+
+
+    //--This lets you reconstruct the final path by walking backward from goal to start.---//
+
+    std::vector<RRTNode> tree;
+    tree.reserve(MAX_ITERS);
+
+    //-- kd_nodes--> This is probably the KD-tree structure used for fast nearest-neighbor lookup.--//
+    std::vector<KDNode> kd_nodes;
+    kd_nodes.reserve(MAX_ITERS);
+    int kd_root = -1;
+
+    //goal_idx = -1 means no goal-reaching node has been found yet
+    // best_goal_cost stores the best path cost to goal found so far
+    int goal_idx = -1;
+    double best_goal_cost = global_cost_bound;
+
+    long rej_dist = 0, rej_rot = 0, rej_col = 0, rej_dup = 0, rej_cost = 0;
+
+    add_node(tree, kd_nodes, kd_root, cfg.start, -1, 0.0, rej_dup);
+
+    for (int iter = 0; iter < MAX_ITERS; ++iter)
+    {
+        int near_idx = -1;
+        RotTranslateEdge cand;
+        bool found = false;
+
+        if (cfg.allow_lateral && (rand() % 100 < LATERAL_BIAS_PERCENT)) {
+            near_idx = rand() % tree.size();
+            found = extend_lateral(cfg, tree, near_idx, cand);
+        } else {
+            bool sampling_goal = false;
+            Configuration r_sample = sample(cfg, iter, GOAL_BIAS_PERCENT, sampling_goal);
+            near_idx = find_nearest(tree, kd_nodes, kd_root, r_sample, cfg, goal_idx);
+
+            if (near_idx != -1) {
+                found = extend(cfg, tree, near_idx, r_sample, sampling_goal, iter, cand);
+            }
+        }
+        if (found) {
+            int last_parent = near_idx;
+            double parent_cost = tree[last_parent].cost;
+            const auto &near = tree[near_idx];
+
+            double rot_cost = (cand.mid.distance(near.point, 2) > 1e-6) ? cand.mid.distance(near.point, {2}) : 0.0;
+            double step_dist = cand.end.distance(cand.mid, {0, 1});
+            double total_cand_cost = parent_cost + rot_cost + step_dist;
+
+            // AO-RRT Cost Pruning: Prune branches that exceed the best goal cost found so far
+            if (total_cand_cost >= best_goal_cost) {
+                rej_cost++;
+                continue;
+            }
+
+            if (rot_cost > 0.0) {
+                last_parent = add_node(tree, kd_nodes, kd_root, cand.mid, last_parent, parent_cost + rot_cost, rej_dup);
+                parent_cost = tree[last_parent].cost;
+            }
+            
+            int end_idx = add_node(tree, kd_nodes, kd_root, cand.end, last_parent, parent_cost + step_dist, rej_dup);
+            update_best_goal(tree, end_idx, cfg, goal_idx, best_goal_cost, iter);
+            
+            if (goal_idx != -1 && iter >= MAX_ITERS) break;
+        } else {
+            rej_col++;
+        }
+    }
+
+    result.rej_dist = rej_dist;
+    result.rej_rot = rej_rot;
+    result.rej_col = rej_col;
+    result.rej_dup = rej_dup;
+    result.rej_cost = rej_cost;
+
+    if (goal_idx != -1)
+    {
+        result.success = true;
+        result.cost = best_goal_cost;
+
+        std::vector<int> path_idx;
+        int curr = goal_idx;
+        while (curr != -1)
+        {
+            path_idx.push_back(curr);
+            curr = tree[curr].parent;
+        }
+        std::reverse(path_idx.begin(), path_idx.end());
+
+        for (int idx : path_idx) {
+            result.path.push_back(tree[idx].point);
+        }
+        result.tree = std::move(tree);
+    }
+
+    return result;
+}
+
+static bool write_rrt_tree(const std::vector<RRTNode> &tree, unsigned int seed, const std::string &filename)
+{
+    std::ofstream tree_file(filename);
+    if (!tree_file) return false;
+    tree_file << "Seed: " << seed << "\n";
+    for (const auto &node : tree) {
+        tree_file << node.point.x << " " << node.point.y << " " << node.point.theta << " " << node.parent << " " << node.cost << "\n";
+    }
+    tree_file.close();
+    return true;
+}
+
+// ============================================================
+// Controller: waypoints -> velocity commands
+// ============================================================
+struct ControlCmd
+{
+    double vx;       // forward velocity (m/s)
+    double vy;       // lateral velocity (m/s)
+    double vtheta;   // angular velocity (rad/s)
+    double duration; // how long to hold this command (s)
+};
+
+static std::vector<ControlCmd> compute_controls(
+    const std::vector<Configuration> &path,
+    double step_time)
+{
+    std::vector<ControlCmd> cmds;
+    if (path.size() < 2)
+        return cmds;
+
+    for (std::size_t i = 1; i < path.size(); ++i)
+    {
+        const auto &p1 = path[i - 1];
+        const auto &p2 = path[i];
+
+        double dx = p2.x - p1.x;
+        double dy = p2.y - p1.y;
+        double dtheta = wrap_angle(p2.theta - p1.theta);
+
+        ControlCmd cmd;
+        double cos_th = std::cos(p1.theta);
+        double sin_th = std::sin(p1.theta);
+        double d_fwd = dx * cos_th + dy * sin_th;
+        double d_lat = -dx * sin_th + dy * cos_th;
+
+        if (std::abs(dtheta) > 1e-6) {
+            // Unicycle Rotation
+            cmd.vx = 0.0; cmd.vy = 0.0; cmd.vtheta = dtheta / step_time;
+        } else if (std::abs(d_fwd) > 1e-6 && std::abs(d_lat) < 1e-3) {
+            // Unicycle Forward/Backward
+            cmd.vx = d_fwd / step_time; cmd.vy = 0.0; cmd.vtheta = 0.0;
+        } else if (std::abs(d_lat) > 1e-6) {
+            // Lateral Translation
+            cmd.vx = 0.0; cmd.vy = d_lat / step_time; cmd.vtheta = 0.0;
+        } else {
+            // No movement or mixed (should not happen with current motion primitives)
+            cmd.vx = 0.0; cmd.vy = 0.0; cmd.vtheta = 0.0;
+        }
+        
+        cmd.duration = step_time;
+        cmds.push_back(cmd);
+    }
+
+    return cmds;
+}
+
+// ============================================================
+// Write SE2 waypoints to file (x, y, theta per line)
+// ============================================================
+static bool write_waypoints_file(const std::vector<Configuration> &path,
+                                 const std::string &filepath)
+{
+    std::ofstream f(filepath);
+    if (!f)
+    {
+        std::cerr << "ERROR: cannot open " << filepath << " for writing\n";
+        return false;
+    }
+    for (const auto &p : path)
+    {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "%f, %f, %f", p.x, p.y, p.theta);
+        f << buf << "\n";
+    }
+    std::printf("Wrote %zu waypoints to %s\n", path.size(), filepath.c_str());
+    return true;
+}
+
+// ============================================================
+// Controls generation logic
+// ============================================================
+
+// ============================================================
+// Write controls to file (vx, vy, vtheta per line)
+// ============================================================
+static bool write_controls_file(const std::vector<ControlCmd> &cmds,
+                                const std::string &path)
+{
+    std::ofstream f(path);
+    if (!f)
+    {
+        std::cerr << "ERROR: cannot open " << path << " for writing\n";
+        return false;
+    }
+    for (const auto &c : cmds)
+    {
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "%f, %f, %f", c.vx, c.vy, c.vtheta);
+        f << buf << "\n";
+    }
+    std::printf("Wrote %zu controls to %s\n", cmds.size(), path.c_str());
+    return true;
+}
+
+// ============================================================
+// Safety audit
+// ============================================================
+static void collision_check_path(const std::vector<Configuration> &path,
+                                 const PlannerConfig &cfg)
+{
+    std::printf("\n=== Final Collision Check (Rectangular Footprint) ===\n");
+    std::printf("  %-4s  %-8s %-8s %-8s %-10s\n", "WP", "x", "y", "theta", "Status");
+
+    bool any_violation = false;
+    for (std::size_t i = 0; i < path.size(); ++i)
+    {
+        double px = path[i].x, py = path[i].y, pth = path[i].theta;
+        bool free = is_free(px, py, pth, cfg);
+        std::printf("  %-4zu  %7.3f  %7.3f  %7.3f  %-10s\n", i, px, py, pth, free ? "Free" : "COLLISION");
+        if (!free)
+            any_violation = true;
+    }
+    if (any_violation)
+        std::printf("  *** WARNING: path has safety violations! ***\n");
+    else
+        std::printf("  All waypoints are collision-free (Rectangular Footprint).\n");
+}
+
+// ============================================================
+// Print configuration summary
+// ============================================================
+static void print_config(const PlannerConfig &cfg)
+{
+    std::printf("\n=== SE(2) RRT Blossom Planner ===\n");
+    std::printf("  Start      : (%.3f, %.3f, %.3f)\n",
+                cfg.start.x, cfg.start.y, cfg.start.theta);
+    std::printf("  Goal       : (%.3f, %.3f, [Any])\n",
+                cfg.goal.x, cfg.goal.y);
+    std::printf("  Robot R    : %.3f m\n", cfg.robot_radius);
+    std::printf("  Safety     : %.3f m\n", cfg.safety_margin);
+    std::printf("  Inflation  : %.3f m\n", cfg.robot_radius + cfg.safety_margin);
+    std::printf("  Step time  : %.1f s\n", cfg.step_time);
+    std::printf("  Obstacles  : %zu\n", cfg.obstacles.size());
+    for (std::size_t i = 0; i < cfg.obstacles.size(); ++i)
+    {
+        const auto &ob = cfg.obstacles[i];
+        std::printf("    [%zu] centre=(%.3f, %.3f) th=%.3f  L=%.3f W=%.3f\n",
+                    i, ob.pose.x, ob.pose.y, ob.pose.theta,
+                    ob.length, ob.width);
+    }
+    std::printf("  Map        : X[%.1f, %.1f]  Y[%.1f, %.1f]\n",
+                cfg.x_min, cfg.x_max, cfg.y_min, cfg.y_max);
+#if defined(JUMP) && (JUMP == true)
+    std::printf("  Goal Region: Annular Ring [0.80m, 1.00m] facing Goal (+/- 10 deg)\n\n");
+#else
+    std::printf("  Goal Tol   : %.3f m\n\n", cfg.goal_tol);
+#endif
+}
+
+// ============================================================
+// Load both config files
+// ============================================================
+static bool load_configs(const std::string &path, PlannerConfig &cfg)
+{
+    if (path.empty()) return true;
+    std::printf("Loading config: %s\n", path.c_str());
+    if (!load_config_file(path, cfg))
+    {
+        std::cerr << "ERROR: cannot load config: " << path << "\n";
+        return false;
+    }
+    cfg.start.theta = wrap_angle(cfg.start.theta);
+    return true;
+}
+
+
+
+
+int main(int argc, char **argv)
+{
+    PlannerConfig cfg;
+    std::string config_file = "planner.cfg";
+
+    // Parse CLI for the master config only
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::strcmp(argv[i], "--config") == 0 && i + 1 < argc)
+            config_file = argv[++i];
+        else if (std::strcmp(argv[i], "-h") == 0 ||
+                 std::strcmp(argv[i], "--help") == 0)
+        {
+            std::printf(
+                "Usage: %s [options]\n"
+                "\n"
+                "Options:\n"
+                "  --config <path>     Master config (default: planner.cfg)\n"
+                "  -h, --help          This message\n",
+                argv[0]);
+            return 0;
+        }
+    }
+
+    // Load static config first to get query_file path
+    if (!load_configs(config_file, cfg))
+        return 1;
+
+    // Now load the query config (start/goal/obstacles)
+    if (!load_configs(cfg.query_file, cfg))
+        return 1;
+
+    // Initialize random seed from config or time
+    unsigned int final_seed;
+    if (cfg.seed != -1) {
+        final_seed = static_cast<unsigned int>(cfg.seed);
+    } else {
+        final_seed = static_cast<unsigned int>(std::time(nullptr));
+    }
+    std::srand(final_seed);
+
+    print_config(cfg);
+
+    // ── Cleanup old files ──
+    std::remove(cfg.waypoints_out.c_str()); 
+    std::remove("rrt_tree.txt");
+
+    // ── Pre-search Safety Check ──
+    if (!is_free(cfg.start.x, cfg.start.y, cfg.start.theta, cfg)) {
+        std::printf("ERROR: Start position is in collision!\n");
+        return 0; // Return 0 so viz can show the setup
+    }
+    if (!is_free(cfg.goal.x, cfg.goal.y, 0.0, cfg)) {
+        std::printf("ERROR: Goal position (%.3f, %.3f) is in collision at θ=0!\n",
+                    cfg.goal.x, cfg.goal.y);
+        return 0; // Return 0 so viz can show the setup
+    }
+
+    // ── Plan ──
+    int num_runs = AOX_RUNS;
+    RRTResult best_overall;
+    best_overall.cost = 1e18;
+
+    std::printf("\n=== Executing %d AO-RRT cost-bounded search attempts ===\n", num_runs);
+    for (int i = 0; i < num_runs; ++i) {
+        unsigned int run_seed = (cfg.seed == -1) ? (final_seed + i) : (unsigned int)cfg.seed;
+        RRTResult res = run_rrt(cfg, run_seed, best_overall.cost);
+        if (res.success) {
+            std::printf("  Run %2d: cost = %10.4f (bound=%.4f, seed=%u)\n", i, res.cost, best_overall.cost, run_seed);
+            if (res.cost < best_overall.cost) {
+                best_overall = std::move(res);
+            }
+        } else {
+            std::printf("  Run %2d: failed or bounded (seed=%u)\n", i, run_seed);
+        }
+        if (cfg.seed != -1) break; // Don't repeat if seed is fixed
+    }
+
+    if (!best_overall.success) {
+        std::printf("RRT search failed to find a path in all attempts.\n");
+        return 0; // Still return 0 so user can see the setup in viz
+    }
+
+    std::printf("\nGlobally best cost: %.4f (seed=%u)\n", best_overall.cost, best_overall.seed);
+    std::printf("Best run rejections: dist=%ld, rot=%ld, col=%ld, dup=%ld, cost_pruned=%ld\n", 
+                best_overall.rej_dist, best_overall.rej_rot, best_overall.rej_col, best_overall.rej_dup, best_overall.rej_cost);
+
+    write_rrt_tree(best_overall.tree, best_overall.seed, "rrt_tree.txt");
+    std::vector<Configuration> path = best_overall.path;
+
+    
+    collision_check_path(path, cfg);
+
+
+    if (!write_waypoints_file(path, cfg.waypoints_out))
+        return 1;
+
+    // ── Generate Controls ──
+    cfg.step_time = 1.0;
+    auto cmds = compute_controls(path, cfg.step_time);
+
+    std::printf("\n=== Controls (%zu commands, step_time=%.1fs) ===\n",
+                cmds.size(), cfg.step_time);
+    std::printf("  %-4s  %10s  %10s  %10s  %8s\n",
+                "Seg", "vx(m/s)", "vy(m/s)", "vth(rad/s)", "dur(s)");
+    for (std::size_t i = 0; i < cmds.size(); ++i)
+    {
+        std::printf("  %-4zu  %10.4f  %10.4f  %10.4f  %8.1f\n",
+                    i, cmds[i].vx, cmds[i].vy, cmds[i].vtheta, cmds[i].duration);
+    }
+
+    if (!write_controls_file(cmds, cfg.controls_out))
+        return 1;
+
+    return 0;
+}
