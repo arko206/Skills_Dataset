@@ -95,10 +95,10 @@ static constexpr double SKILL_HSMOVE_B_INV[3][3] = {
 //   Deadbands: |v| below these is set to 0 (applied AFTER clamping)
 static constexpr double HSMOVE_MIN_V_LINEAR = 0.08;   // m/s   (vx, vy)
 static constexpr double HSMOVE_MIN_V_YAW    = 0.1;   // rad/s (vyaw)
-//   Symmetric signed safety clamps: v in [-MAX, +MAX]
-static constexpr double HSMOVE_MAX_VX   = 1.0;        // m/s
-static constexpr double HSMOVE_MAX_VY   = 0.6;        // m/s
-static constexpr double HSMOVE_MAX_VYAW = 1.0;        // rad/s
+//   Safety clamps: vx in [0, +MAX] (no reverse); vy, vyaw in [-MAX, +MAX]
+static constexpr double HSMOVE_MAX_VX   = 0.6;        // m/s
+static constexpr double HSMOVE_MAX_VY   = 0.4;        // m/s
+static constexpr double HSMOVE_MAX_VYAW = 0.5;        // rad/s
 
 
 // ============================================================
@@ -157,7 +157,7 @@ struct Configuration
     }
 };
 
-double Configuration::weight_theta = 0.5;
+double Configuration::weight_theta = 1.0;   // overwritten once in main() from cfg.w_theta (planner.cfg)
 
 // ============================================================
 // Rectangular obstacle
@@ -202,6 +202,7 @@ struct PlannerConfig
 
     // File paths
     std::string waypoints_out = "skill_chain_se2_waypoints.txt";
+    std::string velocity_commands_out = "skill_chain_velocity_commands.txt";
     std::string query_file = "query.cfg";
 
     // Poses
@@ -358,16 +359,22 @@ static inline HSMoveCommand hsmove_inverse_raw(const BodyDelta &desired)
 }
 
 // ------------------------------------------------------------
-// Symmetric signed clamp: v in [-HSMOVE_MAX_*, +HSMOVE_MAX_*]
-// (same upper-bounds check as go2_navg_exec.cc; sign is preserved)
+// HandStand+Move admissible control domain:
+//   vx   in [0, HSMOVE_MAX_VX]                  (no reverse: negative vx -> 0)
+//   vy   in [-HSMOVE_MAX_VY,   +HSMOVE_MAX_VY]   (signed, lateral allowed)
+//   vyaw in [-HSMOVE_MAX_VYAW, +HSMOVE_MAX_VYAW] (signed, both yaw directions)
+// Any modification sets is_clamped. Deadband is applied afterwards, separately.
 // ------------------------------------------------------------
 static inline HSMoveCommand clamp_hsmove_command(const HSMoveCommand &raw, bool &is_clamped)
 {
     HSMoveCommand v = raw;
     is_clamped = false;
 
-    if (std::fabs(v.vx) > HSMOVE_MAX_VX) {
-        v.vx = std::copysign(HSMOVE_MAX_VX, v.vx);
+    if (v.vx < 0.0) {
+        v.vx = 0.0;                 // reverse is outside the HSMove domain
+        is_clamped = true;
+    } else if (v.vx > HSMOVE_MAX_VX) {
+        v.vx = HSMOVE_MAX_VX;
         is_clamped = true;
     }
     if (std::fabs(v.vy) > HSMOVE_MAX_VY) {
@@ -630,6 +637,8 @@ static bool load_config_file(const std::string &path, PlannerConfig &cfg)
                 cfg.w_theta = std::stod(val);
             else if (key == "waypoints_out")
                 cfg.waypoints_out = val;
+            else if (key == "velocity_commands_out")
+                cfg.velocity_commands_out = val;
             else if (key == "query_file")
                 cfg.query_file = val;
             else if (key.rfind("obs.", 0) == 0)
@@ -914,15 +923,7 @@ static RRTResult run_rrt(const PlannerConfig &cfg, unsigned int seed, double glo
     result.seed = seed;
     std::srand(seed);
 
-    //--(c)heading difference Δθ
-    // --(i) Δθ is scaled by cfg.w_theta
-    // --(ii) so orientation affects nearest-neighbor search and perhaps extension quality
-    //--- (iii) tuning w_theta allows us to control how much the planner cares about heading similarity vs position similarity when finding nearest neighbors and evaluating extensions.
-    // If large, the planner cares more about heading similarity.
-    // If small, it mostly cares about position.
-
-    Configuration::weight_theta = cfg.w_theta;
-
+    // Configuration::weight_theta (= cfg.w_theta) is set once in main() after the configs load.
 
     //-- tree
 
@@ -1020,9 +1021,6 @@ static RRTResult run_rrt(const PlannerConfig &cfg, unsigned int seed, double glo
         if (!skill_edge_free(q_h, q_stand, RobotMode::STAND, cfg) ||
             !is_free(q_stand.x, q_stand.y, q_stand.theta, RobotMode::STAND, cfg))
             continue;   // no recovery here; q_h stays in the tree for further HandStand+Move
-        else{
-            std::printf("  HandStand->Stand recovery from node %d is collision-free; checking goal...\n", h_idx);
-        }
 
         // Goal decision uses the PREDICTED Stand landing pose (XY only), not q_h
         const double goal_error = q_stand.distance(cfg.goal, {0, 1});
@@ -1104,6 +1102,53 @@ static bool write_waypoints_file(const std::vector<Configuration> &path,
     return true;
 }
 
+// ============================================================
+// Write HandStand+Move velocity commands to file (vx, vy, vyaw per line)
+//   One row per HANDSTAND_MOVE edge, in final-path order. The command on
+//   node i is the stored (clamped + deadbanded) command of edge (i-1) -> i.
+//   START / STAND_TO_HANDSTAND / HANDSTAND_TO_STAND edges are not written.
+// ============================================================
+static bool write_velocity_commands_file(const std::vector<RRTNode> &path_nodes,
+                                         const std::string &filepath)
+{
+    std::ofstream f(filepath);
+    if (!f)
+    {
+        std::cerr << "ERROR: cannot open " << filepath << " for writing\n";
+        return false;
+    }
+
+    const auto expected = std::count_if(path_nodes.begin(), path_nodes.end(),
+                                        [](const RRTNode &n)
+                                        { return n.incoming_skill == SkillPrimitive::HANDSTAND_MOVE; });
+
+    long rows = 0;
+    for (const auto &n : path_nodes)
+    {
+        if (n.incoming_skill != SkillPrimitive::HANDSTAND_MOVE)
+            continue;
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "%f, %f, %f",
+                      n.incoming_cmd.vx, n.incoming_cmd.vy, n.incoming_cmd.vyaw);
+        f << buf << "\n";
+        ++rows;
+    }
+
+    if (!f)
+    {
+        std::cerr << "ERROR: failed while writing " << filepath << "\n";
+        return false;
+    }
+    if (rows != expected)
+    {
+        std::cerr << "ERROR: wrote " << rows << " velocity rows but path has "
+                  << expected << " HANDSTAND_MOVE edges\n";
+        return false;
+    }
+    std::printf("Wrote %ld HandStand+Move velocity commands to %s\n", rows, filepath.c_str());
+    return true;
+}
+
 
 
 // ============================================================
@@ -1177,7 +1222,8 @@ static void print_config(const PlannerConfig &cfg)
     }
     std::printf("  Map        : X[%.1f, %.1f]  Y[%.1f, %.1f]\n",
                 cfg.x_min, cfg.x_max, cfg.y_min, cfg.y_max);
-    std::printf("  Goal Tol   : %.3f m (STAND mode, XY only)\n\n", cfg.goal_tol);
+    std::printf("  Goal Tol   : %.3f m (STAND mode, XY only)\n", cfg.goal_tol);
+    std::printf("  w_theta    : %.3f\n\n", Configuration::weight_theta);
 }
 
 // ============================================================
@@ -1192,7 +1238,6 @@ static bool load_configs(const std::string &path, PlannerConfig &cfg)
         std::cerr << "ERROR: cannot load config: " << path << "\n";
         return false;
     }
-    cfg.start.theta = wrap_angle(cfg.start.theta);
     return true;
 }
 
@@ -1228,6 +1273,18 @@ int main(int argc, char **argv)
     if (!load_configs(cfg.query_file, cfg))
         return 1;
 
+    // Normalise start heading to [-pi, pi] once, after both configs are loaded
+    // (start_theta comes from query.cfg)
+    cfg.start.theta = wrap_angle(cfg.start.theta);
+
+    //--(c)heading difference Δθ
+    // --(i) Δθ is scaled by cfg.w_theta
+    // --(ii) so orientation affects nearest-neighbor search and perhaps extension quality
+    //--- (iii) tuning w_theta allows us to control how much the planner cares about heading similarity vs position similarity when finding nearest neighbors and evaluating extensions.
+    // If large, the planner cares more about heading similarity.
+    // If small, it mostly cares about position.
+    Configuration::weight_theta = cfg.w_theta;
+
     // Initialize random seed from config or time
     unsigned int final_seed;
     if (cfg.seed != -1) {
@@ -1240,7 +1297,8 @@ int main(int argc, char **argv)
     print_config(cfg);
 
     // ── Cleanup old files ──
-    std::remove(cfg.waypoints_out.c_str()); 
+    std::remove(cfg.waypoints_out.c_str());
+    std::remove(cfg.velocity_commands_out.c_str());
     std::remove("rrt_tree.txt");
 
     // ── Pre-search Safety Check ──
@@ -1291,6 +1349,9 @@ int main(int argc, char **argv)
 
 
     if (!write_waypoints_file(path, cfg.waypoints_out))
+        return 1;
+
+    if (!write_velocity_commands_file(best_overall.path_nodes, cfg.velocity_commands_out))
         return 1;
 
     return 0;
