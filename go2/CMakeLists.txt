@@ -43,4 +43,13 @@ target_link_libraries(go2_single_handstand unitree_sdk2)
 add_executable(go2_single_handstand_and_move go2_single_handstand_and_move.cpp)
 target_link_libraries(go2_single_handstand_and_move unitree_sdk2)
 
+add_executable(go2_skills_exec go2_skills_exec.cpp)
+target_link_libraries(go2_skills_exec unitree_sdk2)
+
+add_executable(tracking_go2_skills_exec tracking_go2_skills_exec.cpp)
+target_link_libraries(tracking_go2_skills_exec unitree_sdk2)
+
+add_executable(movehs_go2_skills_exec movehs_go2_skills_exec.cpp)
+target_link_libraries(movehs_go2_skills_exec unitree_sdk2)
+
 

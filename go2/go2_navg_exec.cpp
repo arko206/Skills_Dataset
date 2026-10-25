@@ -65,6 +65,29 @@ static const double B_INV[3][3] = {
     { 0.24092, -0.28750,  1.89582 }
 };
 
+
+
+//////--- After incorporating the old data samples -----////////////
+// static const double C_OFFSET[3] = {
+//      0.00947,  
+//      0.02865, 
+//      -0.09240
+ 
+// };
+
+// static const double B_IMPULSE[3][3] = {
+//   {0.43675, -0.05608, -0.01325},
+//   {-0.03830,  0.47770,  0.01793},
+//   {-0.08234,  0.04810,  0.57020}
+// };
+
+// static const double B_INV[3][3] = {
+//   { 2.32174,  0.26796,  0.04554},
+//   { 0.17410,  2.12010, -0.06263},
+//   { 0.32057, -0.14017,  1.76562}
+// };
+
+
 struct SE2Pose {
   double x = 0.0;
   double y = 0.0;
@@ -551,5 +574,3 @@ int main(int argc, char** argv) {
 
   return 0;
 }
-
-// Location of the file: /home/unitree-arka/Go2_Walk_Base_Data_Sensor/Old_Data_Collection/Parameters_RS/Stationary_CSV_req/Tf_stationary_0.0_0.0_0.6.csv

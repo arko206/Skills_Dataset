@@ -7,15 +7,12 @@
  - Sends no further Move() command.
  - Does not send Move(0,0,0).
  - Does not call StopMove().
- - - Exits after sending the single Move() command and saving
   the command timing events.
 ***********************************************************************/
 
-#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
-#include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <ctime>
@@ -42,7 +39,7 @@ std::string VelocityToken(float value)
 {
   std::ostringstream stream;
   stream.imbue(std::locale::classic());
-  stream << std::fixed << std::setprecision(3) << value;
+  stream << std::fixed << std::setprecision(4) << value;
 
   std::string text = stream.str();
 
@@ -86,14 +83,7 @@ bool EnsureDirectory(const std::string &directory)
   return false;
 }
 
-std::atomic<bool> g_stop_requested{false};
 
-void SignalHandler(int)
-{
-  // Do not call robot APIs inside the signal handler.
-  // The normal control flow will notice this flag and stop the robot.
-  g_stop_requested.store(true);
-}
 
 class Custom
 {
@@ -103,7 +93,7 @@ public:
       : command_event_file_(command_event_file)
   {
     // Configure the sport client and initialize its communication.
-    sport_client_.SetTimeout(1.0f);
+    sport_client_.SetTimeout(10.0f);
     sport_client_.Init();
 
     // Save the movement command timing data to a CSV file.
@@ -126,6 +116,7 @@ public:
           << "event,"
           << "wall_time_ns,"
           << "timestamp_iso,"
+          << std::fixed << std::setprecision(4)
           << "vx,"
           << "vy,"
           << "vyaw\n"
@@ -144,34 +135,49 @@ public:
     }
   }
 
-  bool GetInitState()
-  {
-    // Prepare the robot for walking mode.
+bool GetInitState()
+{
+    using SteadyClock = std::chrono::steady_clock;
+
+    const auto static_walk_start =
+        SteadyClock::now();
+
     const int32_t static_walk_ret =
         sport_client_.StaticWalk();
 
-    std::cout << "[INIT] StaticWalk(), return="
-              << static_walk_ret << std::endl;
+    const auto static_walk_return =
+        SteadyClock::now();
+
+    const double static_walk_duration_ms =
+        std::chrono::duration<double, std::milli>(
+            static_walk_return - static_walk_start
+        ).count();
+
+    std::cout
+        << "[INIT] StaticWalk(), return="
+        << static_walk_ret
+        << ", duration="
+        << std::fixed
+        << std::setprecision(6)
+        << static_walk_duration_ms
+        << " ms"
+        << std::endl;
 
     if (static_walk_ret != 0)
     {
-      std::cerr
-          << "[ERROR] StaticWalk() failed. "
-             "No velocity command will be sent."
-          << std::endl;
-      return false;
+        std::cerr
+            << "[ERROR] StaticWalk() failed. "
+            << "No velocity command will be sent."
+            << std::endl;
+        return false;
     }
 
-    // Pause this thread for 500 milliseconds so the robot has time to
-    // settle into walk-ready mode before we start sending motion commands.
-    // This is C++ thread sleep time, not Python time. It suspends only this
-    // thread in the current process.
     std::this_thread::sleep_for(
         std::chrono::milliseconds(500));
 
     motion_ready_ = true;
     return true;
-  }
+}
 
 void RunSingleMove(
     float vx,
@@ -212,6 +218,14 @@ void RunSingleMove(
   const auto move_call_start_steady_time =
       SteadyClock::now();
 
+
+  WriteCommandEvent(
+      "MOVE_START",
+      move_call_start_wall_time,
+      vx,
+      vy,
+      vyaw);
+
   
   const int32_t move_ret =
     sport_client_.Move(vx, vy, vyaw);
@@ -222,6 +236,17 @@ void RunSingleMove(
 
   const auto move_call_return_wall_time =
       WallClock::now();
+
+
+  WriteCommandEvent(
+      "MOVE_CALL_RETURN",
+      move_call_return_wall_time,
+      vx,
+      vy,
+      vyaw);
+
+
+ 
 
   const auto move_call_duration =
       move_call_return_steady_time - move_call_start_steady_time;
@@ -247,15 +272,20 @@ void RunSingleMove(
           move_call_return_steady_time.time_since_epoch())
           .count();
 
+
+
   std::cout
       << "[MOVE] start_steady_time_ns = "
       << start_steady_time_ns
       << std::endl;
 
+   
   std::cout
       << "[MOVE] return_steady_time_ns = "
       << return_steady_time_ns
       << std::endl;
+
+ 
 
   std::cout
       << "[MOVE] move_call_duration_ns = "
@@ -279,9 +309,6 @@ void RunSingleMove(
       << " ms"
       << std::endl;
 
-
-
-
   if (move_ret != 0)
   {
     std::cerr
@@ -291,21 +318,6 @@ void RunSingleMove(
     return;
   }
 
-  
-
-  WriteCommandEvent(
-      "MOVE_START",
-      move_call_start_wall_time,
-      vx,
-      vy,
-      vyaw);
-
-  WriteCommandEvent(
-      "MOVE_CALL_RETURN",
-      move_call_return_wall_time,
-      vx,
-      vy,
-      vyaw);
 
   std::cout
       << "[MOVE] Move() returned successfully."
@@ -384,13 +396,14 @@ private:
       }
 
       command_event_logfile_
-          << event_name << ","
-          << SystemTimeToNanoseconds(time_point) << ","
-          << SystemTimeToIso(time_point) << ","
-          << vx << ","
-          << vy << ","
-          << vyaw << "\n"
-          << std::flush;
+        << event_name << ","
+        << SystemTimeToNanoseconds(time_point) << ","
+        << SystemTimeToIso(time_point) << ","
+        << std::fixed << std::setprecision(4)
+        << vx << ","
+        << vy << ","
+        << vyaw << "\n"
+        << std::flush;
 
     }
 
@@ -491,8 +504,7 @@ int main(int argc, char **argv)
       << command_event_file
       << std::endl;
 
-  std::signal(SIGINT, SignalHandler);
-  std::signal(SIGTERM, SignalHandler);
+
 
   unitree::robot::ChannelFactory::Instance()->Init(
       0,
@@ -516,3 +528,4 @@ int main(int argc, char **argv)
 
   return 0;
 }
+

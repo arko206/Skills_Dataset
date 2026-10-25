@@ -159,8 +159,8 @@ def main():
             # Mode-dependent footprints (prescribed sequence: STAND, HANDSTAND..., STAND)
             STAND_L = cfg.get('robot_length', 0.4)
             STAND_W = cfg.get('robot_width', 0.35)
-            HANDSTAND_L = 0.33
-            HANDSTAND_W = 0.27
+            HANDSTAND_L = 0.135
+            HANDSTAND_W = 0.18
             stand_labeled = False
             handstand_labeled = False
 

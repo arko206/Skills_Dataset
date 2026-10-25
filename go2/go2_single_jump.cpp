@@ -78,7 +78,7 @@ class Custom
         mode_(mode),
         trial_number_(trial_number)
     {
-        sport_client_.SetTimeout(1.0f);
+        sport_client_.SetTimeout(10.0f);
         sport_client_.Init();
 
         command_event_logfile_.open(
@@ -194,6 +194,11 @@ void Trigger_Jump()
   const auto jump_call_return_wall_time =
       WallClock::now();
 
+  
+  WriteCommandEvent(
+      "JUMP_CALL_RETURN",
+      jump_call_return_wall_time);
+
   const auto jump_call_duration =
       jump_call_return_steady_time - jump_call_start_steady_time;
 
@@ -266,9 +271,6 @@ void Trigger_Jump()
 
   
 
-  WriteCommandEvent(
-      "JUMP_CALL_RETURN",
-      jump_call_return_wall_time);
 
   std::cout
       << "[JUMP] Jump() returned successfully."

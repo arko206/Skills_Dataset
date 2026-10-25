@@ -39,7 +39,7 @@ std::string VelocityToken(float value)
 {
   std::ostringstream stream;
   stream.imbue(std::locale::classic());
-  stream << std::fixed << std::setprecision(3) << value;
+  stream << std::fixed << std::setprecision(4) << value;
 
   std::string text = stream.str();
 
@@ -99,7 +99,7 @@ class Custom
         mode_(mode),
         trial_number_(trial_number)
     {
-        sport_client_.SetTimeout(1.0f);
+        sport_client_.SetTimeout(10.0f);
         sport_client_.Init();
 
         command_event_logfile_.open(
@@ -140,34 +140,49 @@ class Custom
     }
   }
 
-  bool GetInitState()
-  {
-    // Prepare the robot for walking mode.
+bool GetInitState()
+{
+    using SteadyClock = std::chrono::steady_clock;
+
+    const auto static_walk_start =
+        SteadyClock::now();
+
     const int32_t static_walk_ret =
         sport_client_.StaticWalk();
 
-    std::cout << "[INIT] StaticWalk(), return="
-              << static_walk_ret << std::endl;
+    const auto static_walk_return =
+        SteadyClock::now();
+
+    const double static_walk_duration_ms =
+        std::chrono::duration<double, std::milli>(
+            static_walk_return - static_walk_start
+        ).count();
+
+    std::cout
+        << "[INIT] StaticWalk(), return="
+        << static_walk_ret
+        << ", duration="
+        << std::fixed
+        << std::setprecision(6)
+        << static_walk_duration_ms
+        << " ms"
+        << std::endl;
 
     if (static_walk_ret != 0)
     {
-      std::cerr
-        << "[ERROR] StaticWalk() failed. "
-        << "No HandStand command will be sent."
-        << std::endl;
-      return false;
+        std::cerr
+            << "[ERROR] StaticWalk() failed. "
+            << "No HandStandMove sequence will be executed."
+            << std::endl;
+        return false;
     }
 
-    // Pause this thread for 500 milliseconds so the robot has time to
-    // settle into walk-ready mode before we start sending motion commands.
-    // This is C++ thread sleep time, not Python time. It suspends only this
-    // thread in the current process.
     std::this_thread::sleep_for(
         std::chrono::milliseconds(500));
 
     motion_ready_ = true;
     return true;
-  }
+}
 
 void Trigger_HandStandAndMove(
     float vx,
@@ -422,15 +437,16 @@ private:
     }
 
    command_event_logfile_
-        << event_name << ","
-        << SystemTimeToNanoseconds(time_point) << ","
-        << SystemTimeToIso(time_point) << ","
-        << mode_ << ","
-        << trial_number_ << ","
-        << vx << ","
-        << vy << ","
-        << vyaw << "\n"
-        << std::flush;
+    << event_name << ","
+    << SystemTimeToNanoseconds(time_point) << ","
+    << SystemTimeToIso(time_point) << ","
+    << mode_ << ","
+    << trial_number_ << ","
+    << std::fixed << std::setprecision(4)
+    << vx << ","
+    << vy << ","
+    << vyaw << "\n"
+    << std::flush;
 }
 
   unitree::robot::go2::SportClient sport_client_;
@@ -558,6 +574,7 @@ int main(int argc, char **argv)
         + ".csv";
 
     std::cout
+        << std::fixed << std::setprecision(4)
         << "[TRIAL] vx=" << vx
         << ", vy=" << vy
         << ", vyaw=" << vyaw
@@ -592,9 +609,8 @@ int main(int argc, char **argv)
         vyaw);
 
     std::cout
-        << "Program finished after the single HandStand command."
-        << std::endl;
+    << "Program finished after the HandStandMove command sequence."
+    << std::endl;
 
     return 0;
 }
-

@@ -48,8 +48,8 @@ enum class SkillPrimitive
 };
 
 // HANDSTAND footprint (STAND footprint still comes from planner.cfg)
-static constexpr double HANDSTAND_LENGTH = 0.33;   // m
-static constexpr double HANDSTAND_WIDTH  = 0.27;   // m
+static constexpr double HANDSTAND_LENGTH = 0.135;//0.385;   // m
+static constexpr double HANDSTAND_WIDTH  = 0.18;//0.27;   // m
 
 // ============================================================
 // Learned skill-transition models (deterministic MEAN values)
@@ -175,10 +175,10 @@ struct Obstacle
 struct PlannerConfig
 {
     // Map bounds (metres)
-    double x_min = -1.5;
+    double x_min = -0.25;
     double x_max = 1.5;
-    double y_min = -1.5;
-    double y_max = 2.75;
+    double y_min = -0.5;
+    double y_max = 2.4;
 
     // Search settings
     int blossom_number = 10;
@@ -676,9 +676,7 @@ static bool load_config_file(const std::string &path, PlannerConfig &cfg)
     return true;
 }
 
-// ============================================================
-// Expansion Logic (Blossom)
-// ============================================================
+
 
 // ============================================================
 // Collision checking
