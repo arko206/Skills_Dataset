@@ -248,7 +248,7 @@ struct PlannerConfig
     // A larger HandStand weight makes walking preferable wherever walking is feasible.
     // Optional planner.cfg keys: stand_motion_weight, handstand_motion_weight
     double stand_motion_weight = 1.0;
-    double handstand_motion_weight = 3.0;
+    double handstand_motion_weight = 4.0;
 
     // Percentage of samples drawn at the goal, from the first iteration (0..100).
     // Optional planner.cfg key: goal_bias_percent
