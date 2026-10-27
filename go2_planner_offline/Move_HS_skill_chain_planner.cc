@@ -134,7 +134,7 @@ static constexpr double SKILL_MOVE_B_INV[3][3] = {
 static constexpr double HSMOVE_MIN_V_LINEAR = 0.08;   // m/s   (vx, vy)
 static constexpr double HSMOVE_MIN_V_YAW    = 0.1;   // rad/s (vyaw)
 //   Safety clamps: vx in [0, +MAX] (no reverse); vy, vyaw in [-MAX, +MAX]
-static constexpr double HSMOVE_MAX_VX   = 0.6;        // m/s
+static constexpr double HSMOVE_MAX_VX   = 0.2;        // m/s
 static constexpr double HSMOVE_MAX_VY   = 0.4;        // m/s
 static constexpr double HSMOVE_MAX_VYAW = 0.5;        // rad/s
 
