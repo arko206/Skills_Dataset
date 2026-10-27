@@ -32,7 +32,7 @@ static const std::string CSV_HEADER = "wp,x,y,theta,mode,incoming_skill,vx,vy,vy
 // ===================================================================
 static constexpr std::chrono::duration<double> HANDSTAND_ACTIVATION_WAIT{5.0};  // after HandStand(true)
 static constexpr std::chrono::duration<double> BETWEEN_MOVE_WAIT{3.5};          // after a Move(), before the next skill
-static constexpr std::chrono::duration<double> BEFORE_RECOVERY_WAIT{2.0};       // after the last HandStand Move(), before HandStand(false)
+static constexpr std::chrono::duration<double> BEFORE_RECOVERY_WAIT{3.5};       // after the last HandStand Move(), before HandStand(false)
 static constexpr std::chrono::duration<double> AFTER_RECOVERY_WAIT{3.5};        // after HandStand(false), before the next skill
 
 enum class RobotMode { STAND, HANDSTAND };
@@ -285,6 +285,11 @@ class Custom {
           if (move_ret != 0) {
             std::cerr << "[ERROR] SportClient::Move() failed at WP " << step.wp << ", return=" << move_ret
                       << ". Stopping the skill chain." << std::endl;
+            if (step.skill == SkillPrimitive::HANDSTAND_MOVE) {
+              const int32_t down_ret = sport_client_.StandDown();  // try to recover to STAND, but the chain is aborted anyway
+              std::cout << "[FALLBACK] StandDown() returned "<< down_ret << std::endl;
+              std::this_thread::sleep_for(AFTER_RECOVERY_WAIT);
+            }
             return false;
           }
 
@@ -310,10 +315,28 @@ class Custom {
         // HANDSTAND -> STAND
         case SkillPrimitive::HANDSTAND_TO_STAND: {
           std::cout << "  HandStand(false)" << std::endl;
+
+          //--- getting the current time before sending the command to the robot ---##
+          const auto start = std::chrono::steady_clock::now();
           const int32_t recover_ret = sport_client_.HandStand(false);
+
+          const auto end = std::chrono::steady_clock::now();
+
+          const double elapsed = std::chrono::duration<double>(end - start).count();
+
+          std::cout << "[RECOVERY] HandStand(false) returned "
+              << recover_ret
+              << " after " << elapsed << " seconds."
+              << std::endl;
+
+
           if (recover_ret != 0) {
             std::cerr << "[ERROR] SportClient::HandStand(false) failed at WP " << step.wp
                       << ", return=" << recover_ret << ". Stopping the skill chain." << std::endl;
+
+            const int32_t down_ret = sport_client_.StandDown();  // try to recover to STAND, but the chain is aborted anyway
+            std::cout << "[FALLBACK] StandDown() returned "<< down_ret << std::endl;
+            std::this_thread::sleep_for(AFTER_RECOVERY_WAIT);
             return false;
           }
           std::this_thread::sleep_for(AFTER_RECOVERY_WAIT);
